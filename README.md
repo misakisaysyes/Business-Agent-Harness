@@ -2,7 +2,7 @@
 
 > 面向业务 Agent 应用的能力复用与运行框架。
 
-Business Agent Harness 是一个基于 Python、LangGraph 和 LangChain 构建的 Agent Harness，面向不同业务场景提供可复用的智能体能力装配与运行机制。项目将 Agent Loop、工具调用、权限控制、上下文与记忆管理、任务编排和运行状态管理等共性能力从业务逻辑中抽离，支持业务 Agent 按“单 Agent 基础能力 → 知识检索增强 → 多 Agent 协作”逐步演进。当前以 `Knowledge Assistant` 作为参考应用，验证文件分析、报告生成和任务管理等典型业务闭环。
+Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent 提供可复用的运行能力。它将 Agent Loop、工具、权限、上下文、记忆和任务管理与业务逻辑解耦，支持从单 Agent 逐步扩展到知识检索和多 Agent 协作。`Knowledge Assistant` 用于验证文件分析、报告生成和任务管理闭环。
 
 当前状态：**第一阶段 M1-M5 已完成；RAG、Agent Teams 和生产化能力处于后续规划阶段。**
 
@@ -10,14 +10,14 @@ Business Agent Harness 是一个基于 Python、LangGraph 和 LangChain 构建�
 
 ## 第一阶段项目亮点
 
-第一阶段围绕通用 Agent Harness，完成从请求接入、上下文构建、模型决策、权限控制、工具执行到状态恢复的单 Agent 闭环，并通过 `Knowledge Assistant` 完成集成验证。
+第一阶段完成了一套面向业务 Agent 的单 Agent 执行闭环，覆盖请求处理、模型调用、工具执行和状态恢复，并通过 `Knowledge Assistant` 完成集成验证。
 
-- **完整且可复用的 Agent Harness**：基于 LangGraph 统一封装 Agent Loop、Tool Use、Permission、Hooks、Context、Memory 和 Task 等通用能力；通过 `AgentProfile` 与标准化 `Message`、`ToolUse`、`ToolResult`、`AgentState` 契约实现业务解耦，支持 `Prepare → Context → Model → Permission → Tool → Model / Final` 执行闭环。
-- **多用户与多会话隔离**：FastAPI Agent Server 支持多个可信本地用户，为用户懒加载并复用独立的 User Runtime 和 AgentLoop；隔离 Workspace、Knowledge、Skill、Memory、Task、Checkpoint 和 Artifact，不同 Conversation 可并发执行且同一 Conversation 同时只允许一个活跃 Run。
-- **长会话上下文与 Memory 治理**：通过优先级、去重和字符预算控制上下文，使用 Context Compact 压缩长会话；超大 ToolResult 外置为 Artifact，Skill 按需加载，Memory 支持用户级跨会话持久化与按需注入。
-- **模型网关与可靠性治理**：`ModelGateway` 统一处理跨进程并发额度、超时/限流/连接错误/5xx 重试、指数退避、`Retry-After` 和备用模型降级，并通过带有 `thread_id`、`run_id` 的事件与日志记录重试、降级和最终失败。
-- **Task System 与 MCP 工具扩展**：Task 支持创建、认领、依赖、完成和失败管理，SQLite WAL 与 `BEGIN IMMEDIATE` 保证并发认领的一致性；MCP 工具转换为统一 Tool 契约，支持多种传输方式、权限判断和 Server 级故障隔离。
-- **Knowledge Assistant 业务闭环验证**：以文件分析为场景，串联 TodoWrite、Task System、受限文件读取、安全计算、报告生成与审批、任务结果保存，验证通用 Harness 在具体业务中的装配与复用能力。
+- **可复用 Agent Harness**：基于 LangGraph 封装 Agent Loop、工具、权限、上下文、记忆和任务能力，通过 `AgentProfile` 与业务逻辑解耦。
+- **用户与会话隔离**：不同用户独立运行并隔离工作区、记忆、任务和产物；不同会话可并发执行，同一会话避免重复运行。
+- **长会话治理**：自动压缩上下文，大型工具结果转存为 Artifact，Skill 和 Memory 按需加载。
+- **可靠模型调用**：统一控制模型并发、重试和备用模型切换，并记录完整的调用事件。
+- **任务与 MCP 扩展**：支持任务生命周期和并发认领，将外部 MCP 工具统一接入权限与故障隔离机制。
+- **业务闭环验证**：`Knowledge Assistant` 已串联文件读取、计算、报告审批与生成、任务跟踪等典型流程。
 
 
 ## 系统架构
