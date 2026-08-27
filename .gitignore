@@ -1,0 +1,33 @@
+# Python / Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境 / Virtual environments
+.venv/
+
+# 本地配置和密钥 / Local configuration and secrets
+.env
+.env.*
+!.env.example
+private-note.txt
+
+# 编辑器和操作系统 / Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+# 构建产物 / Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Agent 运行产物 / Agent runtime artifacts
+artifacts/
+users/
+.agent/
+*.sqlite3-wal
+*.sqlite3-shm

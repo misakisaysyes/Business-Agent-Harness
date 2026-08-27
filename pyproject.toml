@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "extensible-agent-template"
+version = "0.1.0"
+description = "An extensible agent development template built with LangGraph and LangChain."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.116,<1",
+    "httpx>=0.28,<1",
+    "jsonschema>=4.26,<5",
+    "langchain-core>=0.3,<2",
+    "langchain-anthropic>=1,<2",
+    "langchain-mcp-adapters>=0.3,<1",
+    "langchain-openai>=1,<2",
+    "langgraph>=0.4,<2",
+    "langgraph-checkpoint-sqlite>=2,<4",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.9,<3",
+    "pyyaml>=6,<7",
+    "structlog>=25.1,<26",
+    "typer>=0.15,<1",
+    "uvicorn>=0.35,<1",
+]
+
+[project.scripts]
+agent = "entrypoints.cli:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.400,<2",
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.26,<2",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/business",
+    "src/entrypoints",
+    "src/harness",
+    "src/services",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "E",
+    "F",
+    "I",
+    "SIM",
+    "UP",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["business", "entrypoints", "harness", "services"]
+
+[tool.pytest.ini_options]
+minversion = "8.3"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "live_model: tests that call a real model provider and require an explicit API key",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
