@@ -148,3 +148,25 @@ def test_invalid_environment_configuration_fails_validation(
 
     with pytest.raises(ValidationError, match="AGENT_LOGGING__LEVEL|logging.level"):
         AppSettings(_env_file=None)
+
+
+def test_rag_settings_load_from_nested_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_RAG__ENABLED", "true")
+    monkeypatch.setenv(
+        "AGENT_RAG__DATABASE_URL",
+        "postgresql+psycopg://agent:secret@localhost/agent",
+    )
+    monkeypatch.setenv("AGENT_RAG__EMBEDDING_MODEL", "test/embedding")
+    monkeypatch.setenv("AGENT_RAG__EMBEDDING_DIMENSION", "768")
+    monkeypatch.setenv("AGENT_RAG__TOP_K", "8")
+    monkeypatch.setenv("AGENT_RAG__SCORE_THRESHOLD", "0.5")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.rag.enabled
+    assert settings.rag.database_url is not None
+    assert settings.rag.embedding_model == "test/embedding"
+    assert settings.rag.embedding_dimension == 768
+    assert settings.rag.top_k == 8
+    assert settings.rag.score_threshold == 0.5
+    assert "secret" not in repr(settings)

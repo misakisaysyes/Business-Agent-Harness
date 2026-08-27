@@ -18,6 +18,7 @@ from business.knowledge_assistant.profile import create_skill_catalog
 from harness.agent_loop import AgentLoop, create_agent_loop
 from harness.capabilities.context_compact import ContextCompactConfig, ContextCompactor
 from harness.capabilities.memory import MemorySelectionConfig
+from harness.capabilities.rag import AccessScope, RAGPipeline
 from harness.capabilities.skill_loading import SkillCatalog, SkillManifest
 from harness.capabilities.task_system import TaskStore
 from harness.conversation import ConversationService
@@ -38,6 +39,7 @@ from services.model_gateway import (
     ModelRoute,
 )
 from services.observability import ModelGatewayEventCollector
+from services.rag import create_rag_components
 from services.stores import FileMemoryStore, SQLiteConversationStore, SQLiteTaskStore
 from services.usage import ModelUsageCollector, UsageTrackingModel, UserTokenUsageLedger
 
@@ -165,6 +167,8 @@ def bootstrap_agent(
     task_database_path: Path | None = None,
     mcp_integration: MCPIntegration | None = None,
     skill_catalog: SkillCatalog | None = None,
+    rag_pipeline: RAGPipeline | None = None,
+    trusted_user_id: str | None = None,
 ) -> AgentLoop:
     """解析 Profile 和 Model，并创建可运行的 AgentLoop。
 
@@ -193,6 +197,10 @@ def bootstrap_agent(
         busy_timeout_seconds=active_settings.task_system.busy_timeout_seconds,
     )
 
+    active_rag_pipeline = rag_pipeline
+    if active_settings.rag.enabled and active_rag_pipeline is None:
+        active_rag_pipeline = create_rag_components(active_settings.rag).pipeline
+
     profile = create_knowledge_assistant_profile(
         workspace_root=active_workspace,
         knowledge_root=resolve_runtime_path(
@@ -207,6 +215,14 @@ def bootstrap_agent(
         memory_config=memory_config,
         task_store=active_task_store,
         skill_catalog=skill_catalog,
+        rag_pipeline=active_rag_pipeline,
+        rag_access_scope=(
+            AccessScope(user_id=trusted_user_id, include_public=True)
+            if active_rag_pipeline is not None
+            else None
+        ),
+        rag_top_k=active_settings.rag.top_k,
+        rag_score_threshold=active_settings.rag.score_threshold,
     )
     active_mcp = (
         mcp_integration
@@ -292,6 +308,9 @@ class UserRuntimeRegistry:
             else load_mcp_integration_sync(settings.mcp)
         )
         self._runtimes: dict[str, UserRuntime] = {}
+        self._rag_pipeline = (
+            create_rag_components(settings.rag).pipeline if settings.rag.enabled else None
+        )
 
         workspace_root = settings.paths.workspace_root.expanduser().resolve()
         self._artifact_root = resolve_runtime_path(
@@ -356,6 +375,8 @@ class UserRuntimeRegistry:
                 task_database_path=task_database_path,
                 mcp_integration=self.mcp_integration,
                 skill_catalog=skill_catalog,
+                rag_pipeline=self._rag_pipeline,
+                trusted_user_id=user_id,
             ),
             workspace_root=workspace_root,
             private_knowledge_root=private_knowledge_root,

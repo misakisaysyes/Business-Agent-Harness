@@ -8,6 +8,7 @@ from pathlib import Path
 
 import business.knowledge_assistant.profile as profile_module
 from business.knowledge_assistant import create_knowledge_assistant_profile
+from business.knowledge_assistant.system_prompt import get_system_prompt
 from business.knowledge_assistant.tools import FileReaderTool
 from services.stores import FileMemoryStore
 
@@ -100,3 +101,13 @@ def test_business_profile_does_not_import_model_services() -> None:
 
     assert "services.models" not in source
     assert "ChatAnthropic" not in source
+
+
+def test_second_phase_prompt_allows_rag_but_keeps_agent_teams_disabled() -> None:
+    """第二阶段 Prompt 不得同时要求并禁止 document_search。"""
+
+    prompt = get_system_prompt()
+
+    assert "When document_search is available" in prompt
+    assert "Do not use RAG/document_search" not in prompt
+    assert "Do not use subagents or agent teams" in prompt

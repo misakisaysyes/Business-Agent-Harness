@@ -6,7 +6,8 @@ Multi-user command-line client for the agent server.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, cast
+from pathlib import Path
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 import typer
@@ -329,6 +330,39 @@ def serve(
         log_config=None,
         log_level=settings.logging.level.value.lower(),
     )
+
+
+@app.command("index")
+def index_command(
+    source: Annotated[Path, typer.Option("--source", exists=True, file_okay=False)],
+    scope: Annotated[Literal["public", "user"], typer.Option("--scope")] = "public",
+    user: Annotated[str | None, typer.Option("--user")] = None,
+    rebuild: Annotated[bool, typer.Option("--rebuild")] = False,
+) -> None:
+    """把 Markdown/TXT 资料增量写入配置的 pgvector Collection。"""
+
+    from entrypoints.indexer import index_documents
+
+    settings = get_settings()
+    if scope == "user" and not user:
+        raise typer.BadParameter("--user is required when --scope=user")
+    if scope == "public" and user is not None:
+        raise typer.BadParameter("--user is only valid when --scope=user")
+    report = index_documents(
+        settings,
+        source,
+        scope=scope,
+        user_id=user,
+        rebuild=rebuild,
+    )
+    typer.echo(
+        f"indexed={report.indexed} skipped={report.skipped} "
+        f"deleted_chunks={report.deleted_chunks} failed={len(report.failed)}"
+    )
+    for failure in report.failed:
+        typer.echo(f"failed source={failure.source}: {failure.error}", err=True)
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -778,6 +812,7 @@ __all__ = [
     "ConversationSummary",
     "app",
     "chat",
+    "index_command",
     "main",
     "root",
     "serve",

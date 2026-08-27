@@ -2,9 +2,9 @@
 
 > 面向业务 Agent 应用的能力复用与运行框架。
 
-Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent 提供可复用的运行能力。它将 Agent Loop、工具、权限、上下文、记忆和任务管理与业务逻辑解耦，支持从单 Agent 逐步扩展到知识检索和多 Agent 协作。`Knowledge Assistant` 用于验证文件分析、报告生成和任务管理闭环。
+Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent 提供可复用的运行能力。它将 Agent Loop、工具、权限、上下文、记忆和任务管理与业务逻辑解耦，支持从单 Agent 逐步扩展到知识检索和多 Agent 协作。`Knowledge Assistant` 用于验证文件分析、知识检索、报告生成和任务管理闭环。
 
-当前状态：**第一阶段 M1-M5 已完成；RAG、Agent Teams 和生产化能力处于后续规划阶段。**
+当前状态：**第一阶段 M1-M5 和第二阶段 RAG 最小闭环已完成；Agent Teams 和生产化能力处于后续规划阶段。**
 
 详细实施路线请参阅：[通用 Agent 项目架构与实现计划](./plan/implementation-plan.md)
 
@@ -19,6 +19,15 @@ Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent
 - **任务与 MCP 扩展**：支持任务生命周期和并发认领，将外部 MCP 工具统一接入权限与故障隔离机制。
 - **业务闭环验证**：`Knowledge Assistant` 已串联文件读取、计算、报告审批与生成、任务跟踪等典型流程。
 
+## 第二阶段 RAG 能力
+
+第二阶段在第一阶段 Harness 上增加了可关闭、可替换的知识检索能力：
+
+- **可重复入库**：支持 Markdown/TXT、Frontmatter、稳定切分、批量 Embedding、增量更新和重建索引。
+- **隔离检索**：公共知识与当前用户私有知识统一召回，用户 Scope 由 Runtime 绑定，模型不能传入或覆盖身份。
+- **真实引用**：检索结果经过排序、去重、阈值和上下文预算控制，并生成可定位到来源、章节和 Chunk 的 `[S1]` 引用。
+- **独立技术实现**：业务 Tool 只调用通用 RAG Pipeline，Embedding 与 PostgreSQL/pgvector 适配保留在 `services/rag/`。
+- **可选启用**：关闭 RAG 后不注册 `document_search`，第一阶段单 Agent 能力继续运行。
 
 ## 系统架构
 
@@ -35,6 +44,11 @@ flowchart LR
     agentLoop --> permission["Permission Pipeline and Hooks"]
     permission --> tools["Business and Harness Tools"]
     tools --> userStores[("Per-user Tasks, Memory, Artifacts")]
+    tools --> documentSearch["document_search"]
+    documentSearch --> ragPipeline["RAG Pipeline"]
+    ragPipeline --> vectorDb[("PostgreSQL + pgvector")]
+    indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
+    ingestion --> vectorDb
     agentLoop --> modelGateway["Model Gateway"]
     modelGateway -.-> modelProvider["Primary and Fallback Models"]
     agentLoop --> mcpAdapter["MCP Adapter"]
@@ -52,16 +66,16 @@ src/
 │   ├── permissions.py               # Permission Pipeline
 │   ├── tool_use.py                  # Tool 注册和执行
 │   ├── conversation.py              # Conversation 和 Run 生命周期
-│   └── capabilities/                # Todo、Skill、Memory、Compact、Task 等
+│   └── capabilities/                # Todo、Skill、Memory、Task、RAG 等
 ├── business/
 │   └── knowledge_assistant/         # 当前业务 Agent
 │       ├── profile.py               # 业务能力装配
 │       ├── permission_rules.py      # 业务权限规则
-│       ├── tools/                   # Calculator、File Reader、Report Writer
+│       ├── tools/                   # Calculator、File Reader、Report Writer、Document Search
 │       ├── skills/                  # 内置 Skill
 │       └── agent_teams/             # 后续 Agent Teams 预留目录
-├── services/                        # 模型、存储、MCP、日志等实现
-└── entrypoints/                     # CLI、API、Bootstrap 等入口
+├── services/                        # 模型、存储、MCP、日志和 RAG 技术实现
+└── entrypoints/                     # CLI、API、Bootstrap 和 Indexer 入口
 
 tests/
 ├── unit/                            # 单元测试
@@ -75,6 +89,7 @@ tests/
 - `AgentLoop` 负责模型、权限、工具和终止路由，不直接处理具体业务。
 - `ModelGateway` 是共享的模型调用入口，负责重试、并发和降级。
 - `Tool and Capability Layer` 执行本地工具、Task、Memory、Skill 和 MCP 工具。
+- `RAG Pipeline` 负责有界检索和引用；FastEmbed 与 pgvector 负责向量化和持久化召回。
 - SQLite Checkpoint 保存 Graph 状态；用户级 Store 保存 Task、Memory 和 Artifact。
 
 ### 持久化目录
@@ -151,6 +166,41 @@ CLI 内置命令：
 /exit                        退出
 ```
 
+### 启用 RAG
+
+启动本地 PostgreSQL 16 + pgvector：
+
+```bash
+docker compose -f compose.rag.yaml up -d
+```
+
+在 `.env` 中启用并配置 RAG：
+
+```dotenv
+AGENT_RAG__ENABLED=true
+AGENT_RAG__DATABASE_URL=postgresql+psycopg://agent:agent@127.0.0.1:5432/agent
+AGENT_RAG__COLLECTION_NAME=knowledge_assistant
+AGENT_RAG__EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+AGENT_RAG__EMBEDDING_DIMENSION=512
+```
+
+索引公共资料和用户私有资料：
+
+```bash
+uv run agent index \
+  --source src/business/knowledge_assistant/knowledge \
+  --scope public
+
+uv run agent index \
+  --source users/alice/knowledge \
+  --scope user \
+  --user alice
+```
+
+第一次索引会下载 FastEmbed 模型。索引完成并重启 Agent Server 后，Knowledge Assistant
+会注册只读 `document_search` Tool；用户身份由 Runtime 绑定，不接受模型传入的 `user_id`。
+关闭 `AGENT_RAG__ENABLED` 后不会注册该 Tool，第一阶段能力可独立运行。
+
 ### 添加 Skill
 
 内置 Skill 放在：
@@ -219,10 +269,11 @@ uv run pyright
 
 截至 2026-08-27，当前环境验证结果为：
 
-- `170 passed, 1 skipped`；
-- 跳过项是需要真实模型配置的 Live Model 测试；
+- 默认测试 `183 passed, 2 deselected`；
+- 真实 PostgreSQL + pgvector 集成测试 `1 passed`；
+- FastEmbed 中文模型完成真实下载、索引和 `[S1]` 引用检索冒烟测试；
+- 未执行项是需要真实对话模型配置的 Live Model 测试；
 - Ruff 检查通过；
 - Pyright 检查通过；
-- 总体测试覆盖率约 86%。
 
 当前 API 面向本地可信用户，不等同于正式身份认证和生产级多租户系统。

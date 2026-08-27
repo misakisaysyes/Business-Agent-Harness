@@ -8,12 +8,18 @@ from pathlib import Path
 from business.knowledge_assistant.context import KnowledgeAssistantContextProvider
 from business.knowledge_assistant.permission_rules import (
     CalculatorPermissionRule,
+    DocumentSearchPermissionRule,
     ExternalPublishPermissionRule,
     FileReadPermissionRule,
     ReportWritePermissionRule,
 )
 from business.knowledge_assistant.system_prompt import get_system_prompt
-from business.knowledge_assistant.tools import CalculatorTool, FileReaderTool, ReportWriterTool
+from business.knowledge_assistant.tools import (
+    CalculatorTool,
+    DocumentSearchTool,
+    FileReaderTool,
+    ReportWriterTool,
+)
 from harness.capabilities.memory import (
     MemoryPromptProvider,
     MemorySearchPermissionRule,
@@ -23,6 +29,7 @@ from harness.capabilities.memory import (
     MemoryWritePermissionRule,
     MemoryWriteTool,
 )
+from harness.capabilities.rag import AccessScope, RAGPipeline
 from harness.capabilities.skill_loading import (
     LoadSkillPermissionRule,
     LoadSkillTool,
@@ -78,6 +85,10 @@ def create_knowledge_assistant_profile(
     memory_config: MemorySelectionConfig | None = None,
     task_store: TaskStore | None = None,
     skill_catalog: SkillCatalog | None = None,
+    rag_pipeline: RAGPipeline | None = None,
+    rag_access_scope: AccessScope | None = None,
+    rag_top_k: int = 5,
+    rag_score_threshold: float = 0.35,
 ) -> AgentProfile:
     """使用运行目录创建 Knowledge Assistant Profile。
 
@@ -110,6 +121,21 @@ def create_knowledge_assistant_profile(
         else ()
     )
     active_task_store = task_store or InMemoryTaskStore()
+    if (rag_pipeline is None) != (rag_access_scope is None):
+        raise ValueError("RAG pipeline and access scope must be configured together")
+    rag_tools = (
+        (
+            DocumentSearchTool(
+                rag_pipeline,
+                rag_access_scope,
+                default_top_k=rag_top_k,
+                score_threshold=rag_score_threshold,
+            ),
+        )
+        if rag_pipeline is not None and rag_access_scope is not None
+        else ()
+    )
+    rag_rules = (DocumentSearchPermissionRule(),) if rag_tools else ()
 
     return AgentProfile(
         name=BUSINESS_AGENT_NAME,
@@ -123,6 +149,7 @@ def create_knowledge_assistant_profile(
             LoadSkillTool(active_skill_catalog),
             *create_task_tools(active_task_store),
             *memory_tools,
+            *rag_tools,
         ),
         permission_rules=(
             CalculatorPermissionRule(),
@@ -136,6 +163,7 @@ def create_knowledge_assistant_profile(
             LoadSkillPermissionRule(),
             TaskSystemPermissionRule(),
             *memory_rules,
+            *rag_rules,
         ),
         hooks=(
             PermissionCheckHook(),
@@ -156,6 +184,7 @@ def create_knowledge_assistant_profile(
             Capability(name="context_compact"),
             Capability(name="task_system"),
             *((Capability(name="memory"),) if memory_store is not None else ()),
+            *((Capability(name="rag"),) if rag_tools else ()),
         ),
     )
 

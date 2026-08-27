@@ -1,0 +1,5 @@
+{"query":"退款可以在几天内申请？","expected_sources":["product-guide.md"]}
+{"query":"虚拟商品支持无理由退款吗？","expected_sources":["service-policy.md"]}
+{"query":"企业版支持多少成员？","expected_sources":["plans.md"]}
+{"query":"如何重置登录密码？","expected_sources":["account-guide.md"]}
+{"query":"发票在什么时间开具？","expected_sources":["billing.md"]}

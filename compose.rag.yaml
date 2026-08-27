@@ -1,0 +1,23 @@
+services:
+  pgvector:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    environment:
+      POSTGRES_DB: ${RAG_POSTGRES_DB:-agent}
+      POSTGRES_USER: ${RAG_POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:-agent}
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${RAG_POSTGRES_USER:-agent} -d ${RAG_POSTGRES_DB:-agent}",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - agent-pgvector-data:/var/lib/postgresql/data
+
+volumes:
+  agent-pgvector-data:

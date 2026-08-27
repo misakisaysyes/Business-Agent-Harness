@@ -3,7 +3,7 @@
 总体能力边界见[总体实施计划 4.2](./implementation-plan.md#42-第二阶段rag)。本阶段只实现
 Knowledge Assistant 当前需要的检索闭环，目标是在一个开发日内完成并验收。
 
-阶段状态：**待实现（M6）**。
+阶段状态：**已实现并通过自动化、pgvector 集成及 FastEmbed 冒烟验收（M6）**。
 
 ## 1. 阶段目标
 

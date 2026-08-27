@@ -37,6 +37,24 @@ class CalculatorPermissionRule:
         )
 
 
+class DocumentSearchPermissionRule:
+    """允许已由 Runtime 绑定访问范围的只读知识库检索。"""
+
+    name = "allow_document_search"
+
+    async def evaluate(
+        self,
+        tool_use: ToolUse,
+        state: AgentState,
+    ) -> PermissionResult | PermissionDecision:
+        if tool_use.name != "document_search":
+            return PermissionDecision.PASSTHROUGH
+        return PermissionResult(
+            decision=PermissionDecision.ALLOW,
+            reason="document search is read-only and its access scope is runtime-bound",
+        )
+
+
 class FileReadPermissionRule:
     """只允许 File Reader 读取配置的授权范围。
 
@@ -150,6 +168,7 @@ class ExternalPublishPermissionRule:
 
 __all__ = [
     "CalculatorPermissionRule",
+    "DocumentSearchPermissionRule",
     "ExternalPublishPermissionRule",
     "FileReadPermissionRule",
     "ReportWritePermissionRule",

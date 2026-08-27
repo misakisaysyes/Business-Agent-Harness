@@ -198,6 +198,36 @@ class TaskSystemSettings(BaseModel):
     busy_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
 
 
+class RAGSettings(BaseModel):
+    """本地 Embedding、切分、检索和 pgvector 配置。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+    database_url: SecretStr | None = Field(default=None, repr=False)
+    collection_name: str = Field(
+        default="knowledge_assistant",
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,127}$",
+    )
+    knowledge_base_id: str = Field(
+        default="knowledge_assistant",
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,127}$",
+    )
+    embedding_model: str = Field(default="BAAI/bge-small-zh-v1.5", min_length=1)
+    embedding_dimension: int = Field(default=512, gt=0, le=65_535)
+    top_k: int = Field(default=5, ge=1, le=50)
+    score_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    max_context_characters: int = Field(default=12_000, ge=100, le=1_000_000)
+    chunk_size: int = Field(default=1_200, ge=100, le=100_000)
+    chunk_overlap: int = Field(default=150, ge=0, le=10_000)
+
+    @model_validator(mode="after")
+    def overlap_must_be_smaller_than_chunk(self) -> "RAGSettings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("RAG chunk overlap must be smaller than chunk size")
+        return self
+
+
 class MCPServerSettings(BaseModel):
     """一个 MCP Server 的传输和凭据配置。"""
 
@@ -263,6 +293,7 @@ class AppSettings(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings)
     task_system: TaskSystemSettings = Field(default_factory=TaskSystemSettings)
+    rag: RAGSettings = Field(default_factory=RAGSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     database_url: SecretStr | None = Field(default=None, repr=False)
 
@@ -293,6 +324,7 @@ __all__ = [
     "ModelGatewaySettings",
     "ModelSettings",
     "RuntimePathSettings",
+    "RAGSettings",
     "TaskSystemSettings",
     "get_settings",
 ]
