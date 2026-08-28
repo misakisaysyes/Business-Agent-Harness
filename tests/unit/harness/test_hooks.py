@@ -177,7 +177,7 @@ async def test_hook_failure_is_recorded_and_configured_to_continue_or_raise(
 
     assert calls == ["after:UserPromptSubmit"]
     assert result.errors[0].hook_name == "failing"
-    assert "hook execution failed" in caplog.text
+    assert "agent.hook.failed" in caplog.text
     assert "sensitive hook details" not in caplog.text
 
     raising = HookRegistry((FailingHook(),), failure_mode=HookFailureMode.RAISE)
@@ -205,7 +205,7 @@ async def test_builtin_hooks_bridge_permission_warn_safely_and_count_stops(
     logging_hook = ToolCallLoggingHook()
     warning_hook = LargeOutputWarningHook(max_chars=5)
 
-    with caplog.at_level(logging.INFO, logger="harness.hooks"):
+    with caplog.at_level(logging.DEBUG, logger="harness.hooks"):
         await logging_hook.handle(
             PreToolUse(
                 state=state(),
@@ -221,9 +221,9 @@ async def test_builtin_hooks_bridge_permission_warn_safely_and_count_stops(
             PostToolUse(state=state(), tool_use=tool_use, tool_result=tool_result)
         )
 
-    assert "tool call started" in caplog.text
-    assert "tool call finished" in caplog.text
-    assert "tool output exceeds warning threshold" in caplog.text
+    assert "agent.tool.started" in caplog.text
+    assert "agent.tool.finished" in caplog.text
+    assert "agent.tool.output_too_large" in caplog.text
     assert secret not in caplog.text
 
     metrics = StopMetricsHook()

@@ -478,6 +478,11 @@ services/rag/vector_store.py
 - 批量生成 Embedding。
 - 支持增量更新、版本替换、删除和重建索引。
 
+第二阶段只交付可信管理员手工触发的同步 Indexer。生产环境中的用户上传 API、对象存储事件、
+CDC/Webhook、事务性 Index Job/Outbox、持久队列、独立 Index Worker、版本原子切换、删除事件、
+定时对账和索引状态查询延后到第四阶段 M10；Agent Server 只负责检索，不直接监听目录或执行批量
+Embedding。详细设计见[第二阶段实施计划 5.5](./phase-2-implementation-plan.md#55-后续生产化文档更新链路本阶段不实现)。
+
 建议入口：
 
 ```bash
@@ -827,7 +832,7 @@ dev:
 | 第三阶段：Agent Teams | M7 | Subagent、`team.py`、Lead Agent、Researcher | Lead Agent 可以委派隔离的检索任务 |
 | 第三阶段：Agent Teams | M8 | 进程内 MessageBus、Team Protocols、Analyst、Reviewer | Teammates 并行通信、审核和有限重做 |
 | 第四阶段：生产化 | M9 | PostgreSQL、身份、SSE、Trace 和恢复 | Agent Server 可持久运行并安全隔离用户 |
-| 第四阶段：生产化 | M10 | 幂等、分布式队列、Worker、Background/Cron、生产 MessageBus、受约束的 Autonomous Agents | 长任务可跨 Worker 执行和恢复 |
+| 第四阶段：生产化 | M10 | 幂等、分布式队列、RAG 文档上传与自动更新、Index Worker/Reconciler、Background/Cron、生产 MessageBus、受约束的 Autonomous Agents | 长任务可跨 Worker 执行和恢复，文档变更可最终一致地进入可检索索引 |
 | 第四阶段：高级交互 | M11 | `/btw`、分支、重新生成、Steering、Rollback 和综合验收 | 完整知识工作流程稳定运行 |
 
 建议严格按照 M1 到 M11 的顺序推进：M1～M5 完成第一阶段单 Agent 与多用户 CLI；M6 完成 RAG；M7～M8 完成 Agent Teams；M9～M11 按实际部署需求完成生产化和高级交互。

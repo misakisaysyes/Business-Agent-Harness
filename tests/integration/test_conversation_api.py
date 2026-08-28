@@ -734,6 +734,7 @@ async def test_permission_resume_keeps_conversation_and_run_identity(tmp_path: P
     assert delete_conflict.status_code == 409
     assert forbidden.status_code == 403
     assert resumed.status_code == 200
+    assert paused.headers["X-Trace-ID"] != resumed.headers["X-Trace-ID"]
     assert resumed.json()["run_id"] == run_id
     assert resumed.json()["status"] == "idle"
     assert resumed.json()["messages"][-1]["content"] == "读取完成"

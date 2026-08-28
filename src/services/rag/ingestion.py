@@ -17,7 +17,10 @@ from harness.capabilities.rag import (
     SourceDocument,
     VectorStore,
 )
+from harness.logging import AgentLog
 from services.rag.splitter import DocumentSplitter
+
+log = AgentLog(__name__)
 
 SUPPORTED_SUFFIXES = frozenset({".md", ".txt"})
 RESERVED_METADATA = frozenset(
@@ -171,64 +174,98 @@ class IngestionService:
         indexed = skipped = deleted_chunks = 0
         failures: list[IndexFailure] = []
 
-        for document in documents:
-            try:
-                previous = self.store.get_document_state(document.document_id)
-                content_hash = str(document.metadata["content_hash"])
-                if (
-                    not rebuild
-                    and previous is not None
-                    and previous.content_hash == content_hash
-                    and previous.embedding_model == self.embeddings.model_name
-                    and previous.embedding_dimension == self.embeddings.dimension
-                    and previous.splitter_version == self.splitter.config.version
-                ):
-                    skipped += 1
-                    continue
+        with log.operation(
+            "rag.index_directory",
+            scope=scope,
+            rebuild=rebuild,
+            document_count=len(documents),
+            embedding_model=self.embeddings.model_name,
+            embedding_dimension=self.embeddings.dimension,
+        ) as index_outcome:
+            for document in documents:
+                try:
+                    with log.operation(
+                        "rag.index_document",
+                        document_id=document.document_id,
+                        scope=scope,
+                        rebuild=rebuild,
+                        embedding_model=self.embeddings.model_name,
+                        embedding_dimension=self.embeddings.dimension,
+                    ) as document_outcome:
+                        previous = self.store.get_document_state(document.document_id)
+                        content_hash = str(document.metadata["content_hash"])
+                        if (
+                            not rebuild
+                            and previous is not None
+                            and previous.content_hash == content_hash
+                            and previous.embedding_model == self.embeddings.model_name
+                            and previous.embedding_dimension == self.embeddings.dimension
+                            and previous.splitter_version == self.splitter.config.version
+                        ):
+                            skipped += 1
+                            document_outcome["status"] = "skipped"
+                            continue
 
-                indexed_at = datetime.now(UTC).isoformat()
-                enriched = document.model_copy(
-                    update={
-                        "metadata": {
-                            **document.metadata,
-                            "embedding_model": self.embeddings.model_name,
-                            "embedding_dimension": self.embeddings.dimension,
-                            "indexed_at": indexed_at,
-                        }
-                    }
-                )
-                chunks = self.splitter.split(enriched)
-                if not chunks:
-                    raise ValueError("document produced no chunks")
-                vectors = self.embeddings.embed_documents([chunk.text for chunk in chunks])
-                if len(vectors) != len(chunks):
-                    raise RuntimeError("embedding provider returned the wrong vector count")
-                state = DocumentIndexState(
-                    document_id=document.document_id,
-                    content_hash=content_hash,
-                    embedding_model=self.embeddings.model_name,
-                    embedding_dimension=self.embeddings.dimension,
-                    splitter_version=self.splitter.config.version,
-                    chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
-                )
-                self.store.replace_document(state, chunks, vectors)
-                indexed += 1
-                if previous is not None:
-                    deleted_chunks += len(set(previous.chunk_ids) - set(state.chunk_ids))
-            except Exception as error:
-                failures.append(
-                    IndexFailure(
-                        source=document.source,
-                        error=f"{type(error).__name__}: {error}",
+                        indexed_at = datetime.now(UTC).isoformat()
+                        enriched = document.model_copy(
+                            update={
+                                "metadata": {
+                                    **document.metadata,
+                                    "embedding_model": self.embeddings.model_name,
+                                    "embedding_dimension": self.embeddings.dimension,
+                                    "indexed_at": indexed_at,
+                                }
+                            }
+                        )
+                        chunks = self.splitter.split(enriched)
+                        if not chunks:
+                            raise ValueError("document produced no chunks")
+                        vectors = self.embeddings.embed_documents(
+                            [chunk.text for chunk in chunks]
+                        )
+                        if len(vectors) != len(chunks):
+                            raise RuntimeError(
+                                "embedding provider returned the wrong vector count"
+                            )
+                        state = DocumentIndexState(
+                            document_id=document.document_id,
+                            content_hash=content_hash,
+                            embedding_model=self.embeddings.model_name,
+                            embedding_dimension=self.embeddings.dimension,
+                            splitter_version=self.splitter.config.version,
+                            chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
+                        )
+                        self.store.replace_document(state, chunks, vectors)
+                        indexed += 1
+                        removed = (
+                            len(set(previous.chunk_ids) - set(state.chunk_ids))
+                            if previous is not None
+                            else 0
+                        )
+                        deleted_chunks += removed
+                        document_outcome["chunk_count"] = len(chunks)
+                        document_outcome["vector_count"] = len(vectors)
+                        document_outcome["deleted_chunks"] = removed
+                except Exception as error:
+                    failures.append(
+                        IndexFailure(
+                            source=document.source,
+                            error=f"{type(error).__name__}: {error}",
+                        )
                     )
-                )
 
-        return IndexingReport(
-            indexed=indexed,
-            skipped=skipped,
-            deleted_chunks=deleted_chunks,
-            failed=tuple(failures),
-        )
+            index_outcome["indexed_count"] = indexed
+            index_outcome["skipped_count"] = skipped
+            index_outcome["deleted_chunks"] = deleted_chunks
+            index_outcome["failed_count"] = len(failures)
+            if failures:
+                index_outcome["status"] = "partial_failure"
+            return IndexingReport(
+                indexed=indexed,
+                skipped=skipped,
+                deleted_chunks=deleted_chunks,
+                failed=tuple(failures),
+            )
 
 
 __all__ = [

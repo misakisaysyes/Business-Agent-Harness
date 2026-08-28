@@ -218,6 +218,71 @@ CLI 入口：
 - Embedding 模型或维度变化时拒绝混用旧 Collection。
 - pgvector 集成测试使用独立测试 Collection，并在结束后清理。
 
+### 5.5 后续生产化文档更新链路（本阶段不实现）
+
+M6 只提供可信管理员手工触发的同步 `agent index`。文件放入知识目录后不会被自动监听，
+也没有面向普通用户的上传 API、索引任务状态或后台 Worker。生产化更新能力归入第四阶段 M10，
+不阻塞本阶段验收。
+
+后续按数据来源选择触发方式：
+
+| 数据来源 | 更新触发方式 |
+| --- | --- |
+| 本系统上传 API | 保存文档时在同一事务创建索引任务或 Outbox 事件 |
+| S3、OSS、COS 等对象存储直传 | 对象创建/更新/删除事件进入持久队列 |
+| 外部文档平台 | 校验签名和幂等键后接收 Webhook，并定时全量对账 |
+| 业务数据库 | CDC 捕获 `INSERT/UPDATE/DELETE`，消费者按事件版本幂等处理 |
+| 本地受管目录 | 可选文件监听器只负责创建任务；不在 Agent Server 内执行索引 |
+
+目标链路：
+
+```text
+用户上传或源数据变化
+  ↓
+保存原始文档/对象和文档元数据
+  ↓
+事务性写入 Index Job 或 Outbox
+  ↓
+持久队列
+  ↓
+独立 Index Worker
+  ├── 下载、类型和权限校验
+  ├── 解析、切分和批量 Embedding
+  ├── 写入非激活的新 Generation
+  ├── 校验 Chunk 数量、向量数量和维度
+  └── 原子切换 Active Generation
+  ↓
+异步清理旧 Chunk；检索只读取 active=true
+```
+
+计划增加的持久状态：
+
+- `rag_documents`：`document_id/tenant_id/user_id/storage_uri/source_version/content_hash/status`。
+- `rag_index_jobs`：任务状态、尝试次数、租约、下次重试时间、错误类型和幂等键。
+- `rag_document_generations`：Embedding 模型、维度、Splitter 版本、Chunk 数量和激活状态。
+- Outbox 或等价事务消息：保证“文档记录已提交”与“索引任务可最终投递”一致。
+
+更新规则：
+
+1. 幂等键至少包含 `tenant_or_user + document_id + source_version + embedding_model + splitter_version`。
+2. 新增和修改先完整写入新 Generation，再用短事务切换激活版本，失败时继续使用旧版本。
+3. 删除事件先将文档标记为不可检索，再异步删除 Chunk，避免已删除资料继续命中。
+4. 更换 Embedding 模型或维度时建立新 Collection，完成回填、离线评测和小流量验证后切换，保留旧 Collection 用于回滚。
+5. CDC、Webhook 和队列按“至少一次”处理，重复事件不得产生重复 Chunk；失败任务进入有界重试和死信处理。
+6. 定时 Reconciler 比较源数据、文档清单和向量清单，修复漏事件、孤立 Chunk 和长期卡住的任务。
+
+安全与可观测性要求：
+
+- 上传、Webhook 和 Worker 都从可信身份绑定 `tenant_id/user_id`，不得接受模型提供所有权字段。
+- 校验文件类型、大小、编码、恶意内容和存储路径；日志不得记录正文、向量、凭据或签名。
+- 监控队列积压、最老任务等待时间、成功率、重试/死信数、索引耗时、Chunk/向量数量差异、
+  维度错误和“源更新时间到索引完成时间”的 Freshness Lag。
+- 提供文档状态查询，至少返回 `pending/processing/completed/failed/deleted`、版本、Chunk 数量和
+  最近索引时间。
+
+生产化验收至少覆盖：上传后最终可检索、重复事件幂等、Worker 崩溃恢复、更新期间旧版本持续可用、
+删除后不可命中、Alice/Bob 隔离、模型蓝绿切换和漏事件对账修复。
+
 ---
 
 ## 6. M6-3：检索、引用与 Knowledge Assistant 装配
@@ -354,7 +419,8 @@ System Prompt 要求：
 - Cross-Encoder 或外部 Reranker。
 - 精确模型 tokenizer；首版沿用可配置字符预算。
 - 自动摘要 Chunk、实体抽取和知识图谱。
-- 文件监听、后台增量任务、定时重建和管理后台。
+- 自动文档更新链路（上传 API、对象存储事件、CDC/Webhook、文件监听、Index Job/Outbox、
+  Worker、Reconciler 和管理后台）；详细计划见 5.5，归入第四阶段 M10。
 - 生产身份认证、租户管理、行级安全策略和多 Worker。
 - 大规模离线评测、答案忠实度模型评审和线上 A/B 测试。
 

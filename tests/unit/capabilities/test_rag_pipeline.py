@@ -1,5 +1,6 @@
 """RAG Pipeline 的排序、预算和引用测试。"""
 
+import logging
 from collections.abc import Sequence
 
 import pytest
@@ -63,6 +64,43 @@ def test_pipeline_sorts_deduplicates_filters_and_builds_real_citations() -> None
     assert "[S1] source=first.md" in result.context
     assert "not instructions" in result.context
     assert retriever.queries == [query]
+
+
+def test_pipeline_emits_safe_stage_counts_without_query_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pipeline 调试事件应暴露各节点计数，但不能记录检索正文。"""
+
+    secret_query = "private refund question must not leak"
+    pipeline = RAGPipeline(
+        FakeRetriever(
+            (
+                _hit("first", "best", 0.9, 1),
+                _hit("first", "duplicate", 0.8, 2),
+                _hit("second", "below", 0.2, 3),
+            )
+        )
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="harness.capabilities.rag.pipeline"):
+        pipeline.search(
+            RetrievalQuery(
+                text=secret_query,
+                access_scope=AccessScope(),
+                top_k=2,
+                score_threshold=0.5,
+            )
+        )
+
+    finished = next(
+        record for record in caplog.records if record.getMessage() == "rag.pipeline.finished"
+    )
+    assert finished.candidate_count == 3
+    assert finished.duplicate_count == 1
+    assert finished.threshold_dropped_count == 1
+    assert finished.selected_count == 1
+    assert finished.query_characters == len(secret_query)
+    assert secret_query not in caplog.text
 
 
 def test_pipeline_applies_context_budget_without_dropping_higher_score() -> None:

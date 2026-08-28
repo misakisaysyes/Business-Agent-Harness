@@ -329,6 +329,7 @@ def serve(
         port=port,
         log_config=None,
         log_level=settings.logging.level.value.lower(),
+        access_log=False,
     )
 
 
@@ -344,6 +345,7 @@ def index_command(
     from entrypoints.indexer import index_documents
 
     settings = get_settings()
+    configure_logging(settings.logging)
     if scope == "user" and not user:
         raise typer.BadParameter("--user is required when --scope=user")
     if scope == "public" and user is not None:

@@ -5,7 +5,6 @@ Hook events, registration, and dispatch.
 
 import asyncio
 import json
-import logging
 from collections import Counter
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
@@ -14,12 +13,13 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from harness.logging import AgentLog
 from harness.messages import Message, ToolResult, ToolUse
 from harness.permissions import PermissionResult
 from harness.state import AgentState, AgentStopReason
 
 DEFAULT_LARGE_OUTPUT_CHARS = 8_000
-logger = logging.getLogger(__name__)
+log = AgentLog(__name__)
 
 
 class HookEventType(StrEnum):
@@ -272,13 +272,11 @@ class HookRegistry:
                     error_type=type(error).__name__,
                 )
                 errors.append(hook_error)
-                logger.error(
-                    "hook execution failed",
-                    extra={
-                        "hook_name": hook.name,
-                        "hook_event": event.event_type.value,
-                        "hook_error_type": hook_error.error_type,
-                    },
+                log.error(
+                    "agent.hook.failed",
+                    hook_name=hook.name,
+                    hook_event=event.event_type.value,
+                    hook_error_type=hook_error.error_type,
                 )
                 if self.failure_mode is HookFailureMode.RAISE:
                     raise HookExecutionError(
@@ -348,23 +346,19 @@ class ToolCallLoggingHook:
             "run_id": event.state.get("metadata", {}).get("run_id"),
         }
         if isinstance(event, PreToolUse):
-            logger.info(
-                "tool call started",
-                extra={
-                    **correlation,
-                    "tool_name": event.tool_use.name,
-                    "tool_use_id": event.tool_use.id,
-                },
+            log.record(
+                "agent.tool.started",
+                **correlation,
+                tool_name=event.tool_use.name,
+                tool_use_id=event.tool_use.id,
             )
         elif isinstance(event, PostToolUse):
-            logger.info(
-                "tool call finished",
-                extra={
-                    **correlation,
-                    "tool_name": event.tool_use.name,
-                    "tool_use_id": event.tool_use.id,
-                    "tool_is_error": event.tool_result.is_error,
-                },
+            log.record(
+                "agent.tool.finished",
+                **correlation,
+                tool_name=event.tool_use.name,
+                tool_use_id=event.tool_use.id,
+                tool_is_error=event.tool_result.is_error,
             )
         return None
 
@@ -394,13 +388,11 @@ class LargeOutputWarningHook:
             else json.dumps(content, ensure_ascii=False, separators=(",", ":"))
         )
         if len(serialized) > self.max_chars:
-            logger.warning(
-                "tool output exceeds warning threshold",
-                extra={
-                    "tool_name": event.tool_use.name,
-                    "tool_use_id": event.tool_use.id,
-                    "tool_output_chars": len(serialized),
-                },
+            log.warning(
+                "agent.tool.output_too_large",
+                tool_name=event.tool_use.name,
+                tool_use_id=event.tool_use.id,
+                tool_output_chars=len(serialized),
             )
         return None
 

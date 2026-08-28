@@ -5,8 +5,9 @@ Single-process multi-user agent server.
 
 from typing import Literal, NoReturn
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.base import RequestResponseEndpoint
 
 from entrypoints.bootstrap import AgentApplication, InvalidUserIdError, get_agent_application
 from harness.conversation import (
@@ -20,6 +21,7 @@ from harness.conversation import (
     RunNotFoundError,
 )
 from harness.error_recovery import OutputTokenRecoveryError, PromptTooLongRecoveryError
+from harness.logging import AgentLog, new_trace_id
 from harness.messages import Message
 from harness.permissions import PermissionApproval, PermissionRequest
 from services.mcp_tools import MCPToolAdapter
@@ -34,6 +36,7 @@ from services.usage import TokenUsage
 PUBLIC_RUN_RESPONSE_EXCLUDE = {
     "messages": {"__all__": {"provider_metadata"}},
 }
+log = AgentLog(__name__)
 
 
 class CreateConversationResponse(BaseModel):
@@ -220,6 +223,27 @@ def create_app(application: AgentApplication | None = None) -> FastAPI:
     """
 
     server = FastAPI(title="Extensible Agent Server", version="0.1.0")
+
+    @server.middleware("http")
+    async def bind_request_observability(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        """为一次 HTTP 请求建立 Trace 上下文，不记录 URL 参数或请求正文。"""
+
+        trace_id = new_trace_id()
+        with (
+            log.bind(trace_id=trace_id),
+            log.operation("agent.http.request", http_method=request.method) as outcome,
+        ):
+            response = await call_next(request)
+            route = request.scope.get("route")
+            route_template = getattr(route, "path", None)
+            if isinstance(route_template, str):
+                outcome["http_route"] = route_template
+            outcome["http_status_code"] = response.status_code
+            response.headers["X-Trace-ID"] = trace_id
+            return response
 
     def resolve_application() -> AgentApplication:
         return application or get_agent_application()

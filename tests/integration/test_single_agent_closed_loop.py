@@ -196,7 +196,7 @@ async def test_knowledge_assistant_completes_single_agent_file_report_loop(
     )
     transport = httpx.ASGITransport(app=create_app(application))
 
-    with caplog.at_level(logging.INFO, logger="harness.hooks"):
+    with caplog.at_level(logging.DEBUG, logger="harness.hooks"):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             created = await client.post("/users/alice/conversations")
             conversation_id = created.json()["conversation_id"]
@@ -289,7 +289,9 @@ async def test_knowledge_assistant_completes_single_agent_file_report_loop(
     assert report_permission["decision"] == "ask"
     assert report_permission["allowed"] is True
 
-    tool_logs = [record for record in caplog.records if record.message.startswith("tool call")]
+    tool_logs = [
+        record for record in caplog.records if record.message.startswith("agent.tool.")
+    ]
     assert tool_logs
     assert {record.thread_id for record in tool_logs} == {conversation_id}
     assert {record.run_id for record in tool_logs} == {paused_body["run_id"]}

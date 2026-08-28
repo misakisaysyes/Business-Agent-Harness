@@ -19,6 +19,9 @@ from harness.capabilities.rag import (
     RetrievalHit,
     RetrievalQuery,
 )
+from harness.logging import AgentLog
+
+log = AgentLog(__name__)
 
 
 class CollectionConfigurationError(RuntimeError):
@@ -126,13 +129,29 @@ class EmbeddingRetriever:
         self.store = store
 
     def retrieve(self, query: RetrievalQuery) -> Sequence[RetrievalHit]:
-        vector = self.embeddings.embed_query(query.text)
-        return self.store.search(
-            vector,
-            query.access_scope,
-            query.top_k,
-            query.filters,
-        )
+        with log.operation(
+            "rag.embedding.query",
+            embedding_model=self.embeddings.model_name,
+            embedding_dimension=self.embeddings.dimension,
+            query_characters=len(query.text),
+        ) as embedding_outcome:
+            vector = self.embeddings.embed_query(query.text)
+            embedding_outcome["vector_count"] = 1
+        with log.operation(
+            "rag.vector_search",
+            top_k=query.top_k,
+            filter_count=len(query.filters),
+            include_public=query.access_scope.include_public,
+            has_user_scope=query.access_scope.user_id is not None,
+        ) as search_outcome:
+            hits = self.store.search(
+                vector,
+                query.access_scope,
+                query.top_k,
+                query.filters,
+            )
+            search_outcome["retrieved_count"] = len(hits)
+            return hits
 
 
 class _LangChainEmbeddingsAdapter:
@@ -233,52 +252,64 @@ class LangChainPGVectorStore:
         chunks: Sequence[DocumentChunk],
         vectors: Sequence[Sequence[float]],
     ) -> None:
-        chunk_ids = tuple(chunk.chunk_id for chunk in chunks)
-        if len(chunks) != len(vectors) or chunk_ids != state.chunk_ids:
-            raise ValueError("chunks, vectors, and document state are inconsistent")
-        if any(len(vector) != state.embedding_dimension for vector in vectors):
-            raise ValueError("vector dimension does not match document state")
-        self._assert_collection_compatible(state)
-        previous = self.get_document_state(state.document_id)
-        self._store.add_embeddings(
-            texts=[chunk.text for chunk in chunks],
-            embeddings=[list(vector) for vector in vectors],
-            metadatas=[dict(chunk.metadata) for chunk in chunks],
-            ids=[chunk.chunk_id for chunk in chunks],
-        )
-        old_ids = set(previous.chunk_ids if previous is not None else ()) - set(state.chunk_ids)
-        if old_ids:
-            self._store.delete(ids=sorted(old_ids), collection_only=True)
-        statement = self._text(
-            f"""
-            INSERT INTO {self._MANIFEST_TABLE}
-                (collection_name, document_id, content_hash, embedding_model,
-                 embedding_dimension, splitter_version, chunk_ids, indexed_at)
-            VALUES
-                (:collection_name, :document_id, :content_hash, :embedding_model,
-                 :embedding_dimension, :splitter_version, CAST(:chunk_ids AS JSONB), NOW())
-            ON CONFLICT (collection_name, document_id) DO UPDATE SET
-                content_hash = EXCLUDED.content_hash,
-                embedding_model = EXCLUDED.embedding_model,
-                embedding_dimension = EXCLUDED.embedding_dimension,
-                splitter_version = EXCLUDED.splitter_version,
-                chunk_ids = EXCLUDED.chunk_ids,
-                indexed_at = NOW()
-            """
-        )
-        with self._engine.begin() as connection:
-            connection.execute(
-                statement,
-                {
-                    "collection_name": self.collection_name,
-                    "document_id": state.document_id,
-                    "content_hash": state.content_hash,
-                    "embedding_model": state.embedding_model,
-                    "embedding_dimension": state.embedding_dimension,
-                    "splitter_version": state.splitter_version,
-                    "chunk_ids": json.dumps(state.chunk_ids),
-                },
+        with log.operation(
+            "rag.vector_store.replace_document",
+            collection_name=self.collection_name,
+            document_id=state.document_id,
+            chunk_count=len(chunks),
+            vector_count=len(vectors),
+            embedding_model=state.embedding_model,
+            embedding_dimension=state.embedding_dimension,
+        ) as outcome:
+            chunk_ids = tuple(chunk.chunk_id for chunk in chunks)
+            if len(chunks) != len(vectors) or chunk_ids != state.chunk_ids:
+                raise ValueError("chunks, vectors, and document state are inconsistent")
+            if any(len(vector) != state.embedding_dimension for vector in vectors):
+                raise ValueError("vector dimension does not match document state")
+            self._assert_collection_compatible(state)
+            previous = self.get_document_state(state.document_id)
+            self._store.add_embeddings(
+                texts=[chunk.text for chunk in chunks],
+                embeddings=[list(vector) for vector in vectors],
+                metadatas=[dict(chunk.metadata) for chunk in chunks],
+                ids=[chunk.chunk_id for chunk in chunks],
             )
+            old_ids = set(previous.chunk_ids if previous is not None else ()) - set(
+                state.chunk_ids
+            )
+            if old_ids:
+                self._store.delete(ids=sorted(old_ids), collection_only=True)
+            statement = self._text(
+                f"""
+                INSERT INTO {self._MANIFEST_TABLE}
+                    (collection_name, document_id, content_hash, embedding_model,
+                     embedding_dimension, splitter_version, chunk_ids, indexed_at)
+                VALUES
+                    (:collection_name, :document_id, :content_hash, :embedding_model,
+                     :embedding_dimension, :splitter_version, CAST(:chunk_ids AS JSONB), NOW())
+                ON CONFLICT (collection_name, document_id) DO UPDATE SET
+                    content_hash = EXCLUDED.content_hash,
+                    embedding_model = EXCLUDED.embedding_model,
+                    embedding_dimension = EXCLUDED.embedding_dimension,
+                    splitter_version = EXCLUDED.splitter_version,
+                    chunk_ids = EXCLUDED.chunk_ids,
+                    indexed_at = NOW()
+                """
+            )
+            with self._engine.begin() as connection:
+                connection.execute(
+                    statement,
+                    {
+                        "collection_name": self.collection_name,
+                        "document_id": state.document_id,
+                        "content_hash": state.content_hash,
+                        "embedding_model": state.embedding_model,
+                        "embedding_dimension": state.embedding_dimension,
+                        "splitter_version": state.splitter_version,
+                        "chunk_ids": json.dumps(state.chunk_ids),
+                    },
+                )
+            outcome["deleted_chunks"] = len(old_ids)
 
     def search(
         self,
@@ -287,45 +318,60 @@ class LangChainPGVectorStore:
         top_k: int,
         filters: dict[str, JsonValue],
     ) -> tuple[RetrievalHit, ...]:
-        fetch_k = min(max(top_k * 4, top_k), 200)
-        rows: list[tuple[Any, float]] = []
-        if access_scope.include_public:
-            rows.extend(
-                self._store.similarity_search_with_score_by_vector(
+        with log.operation(
+            "rag.pgvector.search",
+            collection_name=self.collection_name,
+            top_k=top_k,
+            filter_count=len(filters),
+            include_public=access_scope.include_public,
+            has_user_scope=access_scope.user_id is not None,
+        ) as outcome:
+            fetch_k = min(max(top_k * 4, top_k), 200)
+            rows: list[tuple[Any, float]] = []
+            public_count = 0
+            user_count = 0
+            if access_scope.include_public:
+                public_rows = self._store.similarity_search_with_score_by_vector(
                     list(vector), k=fetch_k, filter={"scope": "public"}
                 )
-            )
-        if access_scope.user_id is not None:
-            rows.extend(
-                self._store.similarity_search_with_score_by_vector(
+                public_count = len(public_rows)
+                rows.extend(public_rows)
+            if access_scope.user_id is not None:
+                user_rows = self._store.similarity_search_with_score_by_vector(
                     list(vector),
                     k=fetch_k,
                     filter={"scope": "user", "user_id": access_scope.user_id},
                 )
-            )
+                user_count = len(user_rows)
+                rows.extend(user_rows)
 
-        candidates: list[tuple[DocumentChunk, float]] = []
-        for document, distance in rows:
-            metadata = dict(document.metadata)
-            if not _metadata_matches(metadata, filters):
-                continue
-            chunk_id = metadata.get("chunk_id")
-            document_id = metadata.get("document_id")
-            if not isinstance(chunk_id, str) or not isinstance(document_id, str):
-                continue
-            chunk = DocumentChunk(
-                document_id=document_id,
-                chunk_id=chunk_id,
-                text=document.page_content,
-                metadata=metadata,
+            candidates: list[tuple[DocumentChunk, float]] = []
+            for document, distance in rows:
+                metadata = dict(document.metadata)
+                if not _metadata_matches(metadata, filters):
+                    continue
+                chunk_id = metadata.get("chunk_id")
+                document_id = metadata.get("document_id")
+                if not isinstance(chunk_id, str) or not isinstance(document_id, str):
+                    continue
+                chunk = DocumentChunk(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    text=document.page_content,
+                    metadata=metadata,
+                )
+                score = max(0.0, min(1.0, 1.0 - float(distance)))
+                candidates.append((chunk, score))
+            candidates.sort(key=lambda item: (-item[1], item[0].chunk_id))
+            hits = tuple(
+                RetrievalHit(chunk=chunk, score=score, rank=rank)
+                for rank, (chunk, score) in enumerate(candidates[:top_k], start=1)
             )
-            score = max(0.0, min(1.0, 1.0 - float(distance)))
-            candidates.append((chunk, score))
-        candidates.sort(key=lambda item: (-item[1], item[0].chunk_id))
-        return tuple(
-            RetrievalHit(chunk=chunk, score=score, rank=rank)
-            for rank, (chunk, score) in enumerate(candidates[:top_k], start=1)
-        )
+            outcome["public_candidate_count"] = public_count
+            outcome["user_candidate_count"] = user_count
+            outcome["candidate_count"] = len(candidates)
+            outcome["selected_count"] = len(hits)
+            return hits
 
     def _assert_collection_compatible(self, state: DocumentIndexState) -> None:
         statement = self._text(

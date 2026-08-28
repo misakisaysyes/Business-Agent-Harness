@@ -3,6 +3,7 @@
 Multi-user HTTP CLI tests.
 """
 
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,6 +25,7 @@ from entrypoints.cli import (
 )
 from services.config import LogFormat, LoggingSettings, LogLevel
 from services.model_gateway import ModelGatewayEvent, ModelGatewayEventType
+from services.rag import IndexingReport
 
 
 class FakeAgentServerClient:
@@ -366,8 +368,36 @@ def test_serve_initializes_logging_before_starting_uvicorn(monkeypatch) -> None:
             "port": 9000,
             "log_config": None,
             "log_level": "debug",
+            "access_log": False,
         }
     ]
+
+
+def test_index_initializes_logging_before_ingestion(monkeypatch) -> None:
+    """Indexer 应先应用日志配置，再进入 RAG 入库链路。"""
+
+    logging_settings = LoggingSettings(level=LogLevel.DEBUG, format=LogFormat.JSON)
+    events: list[str] = []
+
+    class FakeSettings:
+        logging = logging_settings
+
+    def fake_index_documents(*args: Any, **kwargs: Any) -> IndexingReport:
+        del args, kwargs
+        events.append("index")
+        return IndexingReport(indexed=1)
+
+    monkeypatch.setattr(cli_module, "get_settings", FakeSettings)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_logging",
+        lambda settings: events.append(f"logging:{settings.level.value}"),
+    )
+    monkeypatch.setattr("entrypoints.indexer.index_documents", fake_index_documents)
+
+    cli_module.index_command(Path("."), scope="public", user=None, rebuild=False)
+
+    assert events == ["logging:DEBUG", "index"]
 
 
 def test_cli_sends_message_through_agent_server(monkeypatch) -> None:

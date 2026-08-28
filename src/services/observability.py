@@ -14,24 +14,18 @@ from typing import TextIO
 
 import structlog
 
+from harness.logging import SAFE_LOG_FIELDS
 from services.config import LogFormat, LoggingSettings
 from services.model_gateway import ModelGatewayEvent
 
-SAFE_LOG_FIELDS = (
-    "thread_id",
-    "run_id",
-    "tool_name",
-    "tool_use_id",
-    "tool_is_error",
-    "tool_output_chars",
-    "hook_name",
-    "hook_event",
-    "hook_error_type",
-    "server_name",
-    "error_type",
+_SENSITIVE_THIRD_PARTY_LOGGERS = (
+    "httpcore",
+    "httpcore2",
+    "httpx",
+    "httpx2",
+    "openai",
+    "urllib3",
 )
-
-
 def _safe_log_fields(record: logging.LogRecord) -> dict[str, object]:
     """仅提取允许输出的结构化字段，避免意外记录参数和密钥。
 
@@ -100,11 +94,21 @@ def configure_logging(
     root_logger.addHandler(handler)
     root_logger.setLevel(settings.level.value)
 
+    # 网络 SDK 的 DEBUG/INFO 可能包含 Prompt、Tool Schema、请求体或供应商响应头。
+    # 应用即使开启 DEBUG，也只通过 ModelGateway/AgentLog 输出经过白名单处理的事件。
+    for logger_name in _SENSITIVE_THIRD_PARTY_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
     # Uvicorn 默认会安装自己的 Handler。serve(log_config=None) 后让它统一向根日志传播。
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         uvicorn_logger = logging.getLogger(logger_name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    # 原始 access log 包含实际 URL 路径参数（例如 user_id）。HTTP Middleware 已输出
+    # http_route 模板、状态码、耗时和 trace_id，因此生产日志不再保留这份重复且未脱敏的 INFO。
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     structlog.configure(
         processors=[

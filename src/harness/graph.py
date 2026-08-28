@@ -35,6 +35,7 @@ from harness.hooks import (
     Stop,
     UserPromptSubmit,
 )
+from harness.logging import AgentLog
 from harness.messages import Message, MessageRole, ToolResult, ToolUse
 from harness.model import ModelProvider, ModelRequest
 from harness.permissions import (
@@ -61,6 +62,23 @@ MODEL_ROUTE = "model"
 PERMISSION_ROUTE = "permission"
 FINAL_ROUTE = "final"
 DEFAULT_MAX_ITERATIONS = 8
+log = AgentLog(__name__)
+
+
+def _state_log_fields(state: AgentState) -> dict[str, object]:
+    metadata = state.get("metadata", {})
+    current_trace_id = log.context_fields().get("trace_id")
+    return {
+        "thread_id": state["thread_id"],
+        "run_id": metadata.get("run_id"),
+        "trace_id": (
+            current_trace_id
+            if isinstance(current_trace_id, str)
+            else metadata.get("trace_id")
+        ),
+        "iteration_count": state.get("iteration_count", 0),
+        "message_count": len(state["messages"]),
+    }
 
 
 class AgentGraph(Protocol):
@@ -223,6 +241,12 @@ def build_agent_graph(
                     "model output remained truncated after bounded recovery"
                 )
             retries += 1
+            log.record(
+                "agent.model.output_limit_retry",
+                retry_number=retries,
+                max_retries=recovery_policy.max_output_retries,
+                max_output_tokens=next_limit,
+            )
             active_request = active_request.model_copy(
                 update={"max_output_tokens": next_limit}
             )
@@ -246,6 +270,12 @@ def build_agent_graph(
                     "model output remained truncated after bounded recovery"
                 )
             retries += 1
+            log.record(
+                "agent.model.output_limit_retry",
+                retry_number=retries,
+                max_retries=recovery_policy.max_output_retries,
+                max_output_tokens=next_limit,
+            )
             active_request = active_request.model_copy(
                 update={"max_output_tokens": next_limit}
             )
@@ -293,6 +323,11 @@ def build_agent_graph(
         hook_result = hook_registry.dispatch_sync(
             UserPromptSubmit(state=state, message=_latest_user_message(state))
         )
+        log.record(
+            "agent.turn.prepared",
+            **_state_log_fields(state),
+            status="blocked" if hook_result.blocked else "ready",
+        )
         return {
             "iteration_count": 0,
             "stop_reason": AgentStopReason.HOOK_BLOCKED if hook_result.blocked else None,
@@ -308,6 +343,11 @@ def build_agent_graph(
         hook_result = await hook_registry.dispatch(
             UserPromptSubmit(state=state, message=_latest_user_message(state))
         )
+        log.record(
+            "agent.turn.prepared",
+            **_state_log_fields(state),
+            status="blocked" if hook_result.blocked else "ready",
+        )
         return {
             "iteration_count": 0,
             "stop_reason": AgentStopReason.HOOK_BLOCKED if hook_result.blocked else None,
@@ -316,12 +356,18 @@ def build_agent_graph(
     def compact_context(state: AgentState) -> AgentStateUpdate:
         if context_compactor is None or not context_compactor.config.enabled:
             return {}
-        return compaction_update(state, context_compactor.compact(state))
+        with log.operation("agent.context.compact", **_state_log_fields(state)) as outcome:
+            result = context_compactor.compact(state)
+            outcome["message_count"] = len(result.messages)
+            return compaction_update(state, result)
 
     async def acompact_context(state: AgentState) -> AgentStateUpdate:
         if context_compactor is None or not context_compactor.config.enabled:
             return {}
-        return compaction_update(state, await context_compactor.acompact(state))
+        with log.operation("agent.context.compact", **_state_log_fields(state)) as outcome:
+            result = await context_compactor.acompact(state)
+            outcome["message_count"] = len(result.messages)
+            return compaction_update(state, result)
 
     def reactive_model_update(
         state: AgentState,
@@ -401,32 +447,47 @@ def build_agent_graph(
         if iteration_count >= max_iterations:
             return {"stop_reason": AgentStopReason.MAX_ITERATIONS}
 
-        prompt = prompt_builder.build(state, tool_definitions)
-        request = _create_model_request(
-            state,
-            prompt,
-            tool_definitions,
-            recovery_policy.initial_max_output_tokens,
-        )
-        try:
-            update = _create_model_update(invoke_with_output_recovery(request))
-        except Exception as error:
-            if not is_prompt_too_long_error(error):
-                raise
-            if context_compactor is None or context_compactor.config.max_reactive_retries == 0:
-                raise PromptTooLongRecoveryError(
-                    "prompt exceeds the model context window and reactive compact is disabled"
-                ) from error
+        with log.operation(
+            "agent.model.invoke",
+            **_state_log_fields(state),
+            max_iterations=max_iterations,
+            tool_definition_count=len(tool_definitions),
+            max_output_tokens=recovery_policy.initial_max_output_tokens,
+        ) as outcome:
+            prompt = prompt_builder.build(state, tool_definitions)
+            request = _create_model_request(
+                state,
+                prompt,
+                tool_definitions,
+                recovery_policy.initial_max_output_tokens,
+            )
             try:
-                return reactive_model_update(state, iteration_count)
-            except Exception as retry_error:
-                if is_prompt_too_long_error(retry_error):
+                response = invoke_with_output_recovery(request)
+                update = _create_model_update(response)
+            except Exception as error:
+                if not is_prompt_too_long_error(error):
+                    raise
+                if (
+                    context_compactor is None
+                    or context_compactor.config.max_reactive_retries == 0
+                ):
                     raise PromptTooLongRecoveryError(
-                        "prompt still exceeds the model context window after reactive compact"
-                    ) from retry_error
-                raise
-        update["iteration_count"] = iteration_count + 1
-        return update
+                        "prompt exceeds the model context window and reactive compact is disabled"
+                    ) from error
+                try:
+                    update = reactive_model_update(state, iteration_count)
+                    outcome["status"] = "recovered_after_compaction"
+                    return update
+                except Exception as retry_error:
+                    if is_prompt_too_long_error(retry_error):
+                        raise PromptTooLongRecoveryError(
+                            "prompt still exceeds the model context window after reactive compact"
+                        ) from retry_error
+                    raise
+            outcome["response_tool_use_count"] = len(response.tool_uses)
+            outcome["response_has_content"] = bool(response.content)
+            update["iteration_count"] = iteration_count + 1
+            return update
 
     async def ainvoke_model(state: AgentState) -> AgentStateUpdate:
         if state.get("cancel_requested", False):
@@ -436,32 +497,47 @@ def build_agent_graph(
         if iteration_count >= max_iterations:
             return {"stop_reason": AgentStopReason.MAX_ITERATIONS}
 
-        prompt = prompt_builder.build(state, tool_definitions)
-        request = _create_model_request(
-            state,
-            prompt,
-            tool_definitions,
-            recovery_policy.initial_max_output_tokens,
-        )
-        try:
-            update = _create_model_update(await ainvoke_with_output_recovery(request))
-        except Exception as error:
-            if not is_prompt_too_long_error(error):
-                raise
-            if context_compactor is None or context_compactor.config.max_reactive_retries == 0:
-                raise PromptTooLongRecoveryError(
-                    "prompt exceeds the model context window and reactive compact is disabled"
-                ) from error
+        with log.operation(
+            "agent.model.invoke",
+            **_state_log_fields(state),
+            max_iterations=max_iterations,
+            tool_definition_count=len(tool_definitions),
+            max_output_tokens=recovery_policy.initial_max_output_tokens,
+        ) as outcome:
+            prompt = prompt_builder.build(state, tool_definitions)
+            request = _create_model_request(
+                state,
+                prompt,
+                tool_definitions,
+                recovery_policy.initial_max_output_tokens,
+            )
             try:
-                return await areactive_model_update(state, iteration_count)
-            except Exception as retry_error:
-                if is_prompt_too_long_error(retry_error):
+                response = await ainvoke_with_output_recovery(request)
+                update = _create_model_update(response)
+            except Exception as error:
+                if not is_prompt_too_long_error(error):
+                    raise
+                if (
+                    context_compactor is None
+                    or context_compactor.config.max_reactive_retries == 0
+                ):
                     raise PromptTooLongRecoveryError(
-                        "prompt still exceeds the model context window after reactive compact"
-                    ) from retry_error
-                raise
-        update["iteration_count"] = iteration_count + 1
-        return update
+                        "prompt exceeds the model context window and reactive compact is disabled"
+                    ) from error
+                try:
+                    update = await areactive_model_update(state, iteration_count)
+                    outcome["status"] = "recovered_after_compaction"
+                    return update
+                except Exception as retry_error:
+                    if is_prompt_too_long_error(retry_error):
+                        raise PromptTooLongRecoveryError(
+                            "prompt still exceeds the model context window after reactive compact"
+                        ) from retry_error
+                    raise
+            outcome["response_tool_use_count"] = len(response.tool_uses)
+            outcome["response_has_content"] = bool(response.content)
+            update["iteration_count"] = iteration_count + 1
+            return update
 
     def resolve_permission_results(
         tool_uses: tuple[ToolUse, ...],
@@ -627,6 +703,20 @@ def build_agent_graph(
         if not tool_uses:
             raise ValueError("permission node requires at least one tool use")
         results = permission_pipeline.evaluate_many_sync(tool_uses, state)
+        log.record(
+            "agent.permission.evaluated",
+            **_state_log_fields(state),
+            tool_count=len(tool_uses),
+            permission_allow_count=sum(
+                result.decision is PermissionDecision.ALLOW for result in results
+            ),
+            permission_ask_count=sum(
+                result.decision is PermissionDecision.ASK for result in results
+            ),
+            permission_deny_count=sum(
+                result.decision is PermissionDecision.DENY for result in results
+            ),
+        )
         return create_permission_update(state, tool_uses, results)
 
     async def acheck_permissions(state: AgentState) -> AgentStateUpdate:
@@ -639,6 +729,20 @@ def build_agent_graph(
         if not tool_uses:
             raise ValueError("permission node requires at least one tool use")
         results = await permission_pipeline.evaluate_many(tool_uses, state)
+        log.record(
+            "agent.permission.evaluated",
+            **_state_log_fields(state),
+            tool_count=len(tool_uses),
+            permission_allow_count=sum(
+                result.decision is PermissionDecision.ALLOW for result in results
+            ),
+            permission_ask_count=sum(
+                result.decision is PermissionDecision.ASK for result in results
+            ),
+            permission_deny_count=sum(
+                result.decision is PermissionDecision.DENY for result in results
+            ),
+        )
         return await acreate_permission_update(state, tool_uses, results)
 
     def execute_tools(state: AgentState) -> AgentStateUpdate:
@@ -647,12 +751,18 @@ def build_agent_graph(
             thread_id=state["thread_id"],
             metadata=dict(state.get("metadata", {})),
         )
-        executed = tool_registry.dispatch_many(tool_uses, context)
-        for tool_use, tool_result in zip(tool_uses, executed, strict=True):
-            hook_registry.dispatch_sync(
-                PostToolUse(state=state, tool_use=tool_use, tool_result=tool_result)
-            )
-        return create_tool_update(state, tool_uses, executed)
+        with log.operation(
+            "agent.tools.execute",
+            **_state_log_fields(state),
+            tool_count=len(tool_uses),
+        ) as outcome:
+            executed = tool_registry.dispatch_many(tool_uses, context)
+            for tool_use, tool_result in zip(tool_uses, executed, strict=True):
+                hook_registry.dispatch_sync(
+                    PostToolUse(state=state, tool_use=tool_use, tool_result=tool_result)
+                )
+            outcome["failed_count"] = sum(result.is_error for result in executed)
+            return create_tool_update(state, tool_uses, executed)
 
     async def aexecute_tools(state: AgentState) -> AgentStateUpdate:
         tool_uses = tuple(state.get("pending_tool_uses", ()))
@@ -660,12 +770,18 @@ def build_agent_graph(
             thread_id=state["thread_id"],
             metadata=dict(state.get("metadata", {})),
         )
-        executed = await tool_registry.adispatch_many(tool_uses, context)
-        for tool_use, tool_result in zip(tool_uses, executed, strict=True):
-            await hook_registry.dispatch(
-                PostToolUse(state=state, tool_use=tool_use, tool_result=tool_result)
-            )
-        return create_tool_update(state, tool_uses, executed)
+        with log.operation(
+            "agent.tools.execute",
+            **_state_log_fields(state),
+            tool_count=len(tool_uses),
+        ) as outcome:
+            executed = await tool_registry.adispatch_many(tool_uses, context)
+            for tool_use, tool_result in zip(tool_uses, executed, strict=True):
+                await hook_registry.dispatch(
+                    PostToolUse(state=state, tool_use=tool_use, tool_result=tool_result)
+                )
+            outcome["failed_count"] = sum(result.is_error for result in executed)
+            return create_tool_update(state, tool_uses, executed)
 
     def create_tool_update(
         state: AgentState,
@@ -707,6 +823,12 @@ def build_agent_graph(
             else:
                 stop_reason = AgentStopReason.COMPLETED
         hook_registry.dispatch_sync(Stop(state=state, reason=stop_reason))
+        log.record(
+            "agent.turn.finished",
+            **_state_log_fields(state),
+            stop_reason=stop_reason.value,
+            max_iterations=max_iterations,
+        )
         return {"stop_reason": stop_reason}
 
     async def afinalize(state: AgentState) -> AgentStateUpdate:
@@ -718,6 +840,12 @@ def build_agent_graph(
             else:
                 stop_reason = AgentStopReason.COMPLETED
         await hook_registry.dispatch(Stop(state=state, reason=stop_reason))
+        log.record(
+            "agent.turn.finished",
+            **_state_log_fields(state),
+            stop_reason=stop_reason.value,
+            max_iterations=max_iterations,
+        )
         return {"stop_reason": stop_reason}
 
     def route_after_prepare(state: AgentState) -> Literal["model", "final"]:

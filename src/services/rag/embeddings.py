@@ -7,6 +7,10 @@ from collections.abc import Sequence
 from threading import Lock
 from typing import Any
 
+from harness.logging import AgentLog
+
+log = AgentLog(__name__)
+
 
 class EmbeddingDimensionError(ValueError):
     """模型实际维度与 Collection 配置不一致。"""
@@ -44,18 +48,34 @@ class FastEmbedProvider:
     def embed_documents(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         if not texts:
             return ()
-        vectors = self._model_instance().passage_embed(list(texts))
-        return tuple(self._validated_vector(vector) for vector in vectors)
+        with log.operation(
+            "rag.embedding.documents",
+            embedding_model=self.model_name,
+            embedding_dimension=self.dimension,
+            document_count=len(texts),
+        ) as outcome:
+            vectors = self._model_instance().passage_embed(list(texts))
+            validated = tuple(self._validated_vector(vector) for vector in vectors)
+            outcome["vector_count"] = len(validated)
+            return validated
 
     def embed_query(self, text: str) -> tuple[float, ...]:
         if not text.strip():
             raise ValueError("embedding query must not be empty")
-        vectors = self._model_instance().query_embed([text])
-        try:
-            vector = next(iter(vectors))
-        except StopIteration as error:
-            raise RuntimeError("embedding model returned no query vector") from error
-        return self._validated_vector(vector)
+        with log.operation(
+            "rag.embedding.provider_query",
+            embedding_model=self.model_name,
+            embedding_dimension=self.dimension,
+            query_characters=len(text),
+        ) as outcome:
+            vectors = self._model_instance().query_embed([text])
+            try:
+                vector = next(iter(vectors))
+            except StopIteration as error:
+                raise RuntimeError("embedding model returned no query vector") from error
+            validated = self._validated_vector(vector)
+            outcome["vector_count"] = 1
+            return validated
 
     def _model_instance(self) -> Any:
         if self._model is not None:
@@ -69,7 +89,12 @@ class FastEmbedProvider:
                     kwargs["cache_dir"] = self._cache_dir
                 if self._threads is not None:
                     kwargs["threads"] = self._threads
-                self._model = TextEmbedding(**kwargs)
+                with log.operation(
+                    "rag.embedding.model_load",
+                    embedding_model=self.model_name,
+                    embedding_dimension=self.dimension,
+                ):
+                    self._model = TextEmbedding(**kwargs)
         return self._model
 
     def _validated_vector(self, vector: Any) -> tuple[float, ...]:

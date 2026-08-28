@@ -6,7 +6,6 @@ Model concurrency, fallback, and retry entry point for a personal project.
 import asyncio
 import fcntl
 import hashlib
-import logging
 import os
 import random
 import threading
@@ -25,11 +24,12 @@ from harness.error_recovery import (
     safe_error_reason,
     status_code,
 )
+from harness.logging import AgentLog
 from harness.messages import Message
 from harness.model import ModelProvider, ModelRequest
 from services.config import ModelGatewaySettings
 
-logger = logging.getLogger(__name__)
+log = AgentLog(__name__)
 
 
 class ModelGatewayEventType(StrEnum):
@@ -320,7 +320,14 @@ class ModelGateway:
                 fallback_announced = True
 
             try:
-                response = route.provider.invoke(request)
+                with log.operation(
+                    "agent.model.provider",
+                    model=route.label,
+                    retry_number=retry_number,
+                ) as outcome:
+                    response = route.provider.invoke(request)
+                    outcome["response_tool_use_count"] = len(response.tool_uses)
+                    outcome["response_has_content"] = bool(response.content)
                 self._emit_selected(route)
                 return response
             except Exception as error:
@@ -363,7 +370,14 @@ class ModelGateway:
                 fallback_announced = True
 
             try:
-                response = await route.provider.ainvoke(request)
+                with log.operation(
+                    "agent.model.provider",
+                    model=route.label,
+                    retry_number=retry_number,
+                ) as outcome:
+                    response = await route.provider.ainvoke(request)
+                    outcome["response_tool_use_count"] = len(response.tool_uses)
+                    outcome["response_has_content"] = bool(response.content)
                 self._emit_selected(route)
                 return response
             except Exception as error:
@@ -444,12 +458,23 @@ class ModelGateway:
         )
 
     def _emit(self, event: ModelGatewayEvent) -> None:
+        log.record(
+            f"agent.model.gateway.{event.event_type.value}",
+            model=event.model,
+            fallback_model=event.fallback_model,
+            retry_number=event.retry_number,
+            max_retries=event.max_retries,
+            delay_seconds=event.delay_seconds,
+        )
         if self.event_handler is None:
             return
         try:
             self.event_handler(event)
-        except Exception:
-            logger.exception("model gateway event handler failed")
+        except Exception as error:
+            log.error(
+                "agent.model.gateway.event_handler_failed",
+                error_type=type(error).__name__,
+            )
 
     @staticmethod
     def _raise_if_provider_rejected(error: Exception) -> None:

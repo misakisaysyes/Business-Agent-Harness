@@ -313,7 +313,7 @@ def test_read_only_mcp_tool_uses_bootstrap_permission_and_hooks(
         mcp_integration=integration,
     )
 
-    with caplog.at_level(logging.INFO, logger="harness.hooks"):
+    with caplog.at_level(logging.DEBUG, logger="harness.hooks"):
         result = loop.invoke(
             {
                 "thread_id": "mcp-bootstrap",
@@ -325,8 +325,8 @@ def test_read_only_mcp_tool_uses_bootstrap_permission_and_hooks(
     assert remote.calls
     assert "calculator" in {tool.name for tool in model.sync_requests[0].tools}
     assert "mcp__docs__lookup" in {tool.name for tool in model.sync_requests[0].tools}
-    assert "tool call started" in caplog.text
-    assert "tool call finished" in caplog.text
+    assert "agent.tool.started" in caplog.text
+    assert "agent.tool.finished" in caplog.text
 
 
 def test_destructive_mcp_tool_pauses_before_remote_call(tmp_path: Path) -> None:

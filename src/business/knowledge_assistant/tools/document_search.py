@@ -9,8 +9,11 @@ from typing import cast
 from pydantic import Field, JsonValue
 
 from harness.capabilities.rag import AccessScope, RAGPipeline, RetrievalQuery
+from harness.logging import AgentLog
 from harness.messages import ToolResult, ToolUse
 from harness.tool_use import ToolInput
+
+log = AgentLog(__name__)
 
 
 class DocumentSearchInput(ToolInput):
@@ -53,39 +56,55 @@ class DocumentSearchTool:
             filters["category"] = tool_input.category
         if tool_input.tags:
             filters["tags"] = list(tool_input.tags)
-        result = await asyncio.to_thread(
-            self.pipeline.search,
-            RetrievalQuery(
-                text=tool_input.query,
-                access_scope=self.access_scope,
-                top_k=tool_input.top_k or self.default_top_k,
-                score_threshold=self.score_threshold,
-                filters=filters,
-            ),
-        )
-        matches: list[dict[str, JsonValue]] = []
-        for hit, citation in zip(result.matches, result.citations, strict=True):
-            matches.append(
-                {
-                    "citation": f"[{citation.id}]",
-                    "source": citation.source,
-                    "section": citation.section,
-                    "chunk_id": citation.chunk_id,
-                    "score": hit.score,
-                    "text": hit.chunk.text,
-                }
-            )
-        return ToolResult(
+        top_k = tool_input.top_k or self.default_top_k
+        with log.operation(
+            "rag.document_search",
+            tool_name=self.name,
             tool_use_id=tool_use.id,
-            content=cast(
-                JsonValue,
-                {
-                    "message": result.message,
-                    "matches": matches,
-                    "context": result.context,
-                },
-            ),
-        )
+            query_characters=len(tool_input.query),
+            top_k=top_k,
+            score_threshold=self.score_threshold,
+            filter_count=len(filters),
+            include_public=self.access_scope.include_public,
+            has_user_scope=self.access_scope.user_id is not None,
+        ) as outcome:
+            result = await asyncio.to_thread(
+                self.pipeline.search,
+                RetrievalQuery(
+                    text=tool_input.query,
+                    access_scope=self.access_scope,
+                    top_k=top_k,
+                    score_threshold=self.score_threshold,
+                    filters=filters,
+                ),
+            )
+            matches: list[dict[str, JsonValue]] = []
+            for hit, citation in zip(result.matches, result.citations, strict=True):
+                matches.append(
+                    {
+                        "citation": f"[{citation.id}]",
+                        "source": citation.source,
+                        "section": citation.section,
+                        "chunk_id": citation.chunk_id,
+                        "score": hit.score,
+                        "text": hit.chunk.text,
+                    }
+                )
+            outcome["selected_count"] = len(matches)
+            outcome["context_characters"] = len(result.context)
+            if not matches:
+                outcome["status"] = "no_matches"
+            return ToolResult(
+                tool_use_id=tool_use.id,
+                content=cast(
+                    JsonValue,
+                    {
+                        "message": result.message,
+                        "matches": matches,
+                        "context": result.context,
+                    },
+                ),
+            )
 
 
 __all__ = ["DocumentSearchInput", "DocumentSearchTool"]

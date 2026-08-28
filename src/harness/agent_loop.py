@@ -15,11 +15,45 @@ from harness.context import ContextBudget, ContextProvider
 from harness.error_recovery import ErrorRecoveryPolicy
 from harness.graph import AgentGraph, build_agent_graph
 from harness.hooks import Hook, HookFailureMode
+from harness.logging import AgentLog, new_trace_id
 from harness.model import ModelProvider
 from harness.permissions import PermissionApproval, PermissionRequest, PermissionRule
 from harness.state import AgentState
 from harness.system_prompt import MemoryProvider, SystemPromptProvider
 from harness.tool_use import Tool
+
+log = AgentLog(__name__)
+
+
+def _state_log_fields(state: AgentState) -> dict[str, object]:
+    metadata = state.get("metadata", {})
+    current_trace_id = log.context_fields().get("trace_id")
+    return {
+        "thread_id": state["thread_id"],
+        "run_id": metadata.get("run_id"),
+        "trace_id": (
+            current_trace_id
+            if isinstance(current_trace_id, str)
+            else metadata.get("trace_id")
+        ),
+        "message_count": len(state["messages"]),
+    }
+
+
+def _binding_fields(state: AgentState) -> dict[str, object]:
+    fields = _state_log_fields(state)
+    current_trace_id = log.context_fields().get("trace_id")
+    state_trace_id = fields.get("trace_id")
+    trace_id = (
+        current_trace_id
+        if isinstance(current_trace_id, str)
+        else state_trace_id if isinstance(state_trace_id, str) else new_trace_id()
+    )
+    return {
+        "trace_id": trace_id,
+        "thread_id": fields["thread_id"],
+        "run_id": fields["run_id"],
+    }
 
 
 class AgentLoop:
@@ -54,7 +88,16 @@ class AgentLoop:
         """
 
         active_config = config or {"configurable": {"thread_id": state["thread_id"]}}
-        return self.graph.invoke(state, config=active_config)
+        with (
+            log.bind(**_binding_fields(state)),
+            log.operation("agent.graph", **_state_log_fields(state)) as outcome,
+        ):
+            result = self.graph.invoke(state, config=active_config)
+            outcome["message_count"] = len(result["messages"])
+            stop_reason = result.get("stop_reason")
+            if stop_reason is not None:
+                outcome["stop_reason"] = stop_reason.value
+            return result
 
     async def ainvoke(
         self,
@@ -67,7 +110,16 @@ class AgentLoop:
         """
 
         active_config = config or {"configurable": {"thread_id": state["thread_id"]}}
-        return await self.graph.ainvoke(state, config=active_config)
+        with (
+            log.bind(**_binding_fields(state)),
+            log.operation("agent.graph", **_state_log_fields(state)) as outcome,
+        ):
+            result = await self.graph.ainvoke(state, config=active_config)
+            outcome["message_count"] = len(result["messages"])
+            stop_reason = result.get("stop_reason")
+            if stop_reason is not None:
+                outcome["stop_reason"] = stop_reason.value
+            return result
 
     def stream(
         self,
@@ -80,7 +132,24 @@ class AgentLoop:
         """
 
         active_config = config or {"configurable": {"thread_id": state["thread_id"]}}
-        return self.graph.stream(state, config=active_config, stream_mode="values")
+
+        def observed_stream() -> Iterator[AgentState]:
+            with (
+                log.bind(**_binding_fields(state)),
+                log.operation("agent.graph.stream", **_state_log_fields(state)) as outcome,
+            ):
+                last_state: AgentState | None = None
+                for snapshot in self.graph.stream(
+                    state,
+                    config=active_config,
+                    stream_mode="values",
+                ):
+                    last_state = snapshot
+                    yield snapshot
+                if last_state is not None:
+                    outcome["message_count"] = len(last_state["messages"])
+
+        return observed_stream()
 
     def resume(
         self,
@@ -99,7 +168,17 @@ class AgentLoop:
             if isinstance(approval, PermissionApproval)
             else approval
         )
-        return self.graph.invoke(Command(resume=resume_value), config=active_config)
+        trace_id = log.context_fields().get("trace_id")
+        with (
+            log.bind(
+                trace_id=trace_id if isinstance(trace_id, str) else new_trace_id(),
+                thread_id=thread_id,
+            ),
+            log.operation("agent.graph.resume", thread_id=thread_id) as outcome,
+        ):
+            result = self.graph.invoke(Command(resume=resume_value), config=active_config)
+            outcome["message_count"] = len(result["messages"])
+            return result
 
     async def aresume(
         self,
@@ -118,7 +197,17 @@ class AgentLoop:
             if isinstance(approval, PermissionApproval)
             else approval
         )
-        return await self.graph.ainvoke(Command(resume=resume_value), config=active_config)
+        trace_id = log.context_fields().get("trace_id")
+        with (
+            log.bind(
+                trace_id=trace_id if isinstance(trace_id, str) else new_trace_id(),
+                thread_id=thread_id,
+            ),
+            log.operation("agent.graph.resume", thread_id=thread_id) as outcome,
+        ):
+            result = await self.graph.ainvoke(Command(resume=resume_value), config=active_config)
+            outcome["message_count"] = len(result["messages"])
+            return result
 
     async def adelete_thread(self, thread_id: str) -> None:
         """删除指定 Conversation 的全部 Checkpoint。
@@ -126,7 +215,8 @@ class AgentLoop:
         Delete every checkpoint associated with a conversation.
         """
 
-        await self.checkpointer.adelete_thread(thread_id)
+        with log.operation("agent.checkpoint.delete", thread_id=thread_id):
+            await self.checkpointer.adelete_thread(thread_id)
 
 
 def get_permission_request(result: AgentState) -> PermissionRequest | None:

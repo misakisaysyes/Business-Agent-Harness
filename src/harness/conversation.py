@@ -13,9 +13,12 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from harness.agent_loop import AgentLoop, get_permission_request
+from harness.logging import AgentLog, new_trace_id
 from harness.messages import Message, MessageRole
 from harness.permissions import PermissionApproval, PermissionRequest
 from harness.state import AgentState
+
+log = AgentLog(__name__)
 
 
 class ConversationStatus(StrEnum):
@@ -163,6 +166,7 @@ class ConversationService:
         conversation_id = uuid4().hex
         record = ConversationRecord(conversation_id=conversation_id, user_id=user_id)
         self._store.create(record)
+        log.record("agent.conversation.created", conversation_id=conversation_id)
         return record
 
     def list(self, user_id: str) -> tuple[ConversationRecord, ...]:
@@ -192,8 +196,12 @@ class ConversationService:
                 f"cannot delete a conversation with an active run: {record.active_run_id}"
             )
 
-        await self._get_agent_loop(user_id).adelete_thread(conversation_id)
-        self._store.delete(conversation_id)
+        with (
+            log.bind(conversation_id=conversation_id, thread_id=conversation_id),
+            log.operation("agent.conversation.delete"),
+        ):
+            await self._get_agent_loop(user_id).adelete_thread(conversation_id)
+            self._store.delete(conversation_id)
 
     async def send_message(
         self,
@@ -228,32 +236,56 @@ class ConversationService:
         record.permission_request = None
         self._store.save(record)
 
-        metadata: dict[str, JsonValue] = {"user_id": user_id, "run_id": run_id}
-        if required_tool is not None:
-            metadata["required_tool"] = required_tool
+        current_trace_id = log.context_fields().get("trace_id")
+        trace_id = (
+            current_trace_id if isinstance(current_trace_id, str) else new_trace_id()
+        )
+        with (
+            log.bind(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                thread_id=conversation_id,
+                run_id=run_id,
+            ),
+            log.operation(
+                "agent.run",
+                message_count=1,
+                required_tool=required_tool,
+            ) as outcome,
+        ):
+            metadata: dict[str, JsonValue] = {
+                "user_id": user_id,
+                "run_id": run_id,
+                "trace_id": trace_id,
+            }
+            if required_tool is not None:
+                metadata["required_tool"] = required_tool
 
-        state: AgentState = {
-            "thread_id": conversation_id,
-            "messages": [Message(role=MessageRole.USER, content=content)],
-            "metadata": metadata,
-        }
+            state: AgentState = {
+                "thread_id": conversation_id,
+                "messages": [Message(role=MessageRole.USER, content=content)],
+                "metadata": metadata,
+            }
 
-        task_key = (conversation_id, run_id)
-        graph_task = asyncio.create_task(agent_loop.ainvoke(state))
-        self._active_tasks[task_key] = graph_task
-        try:
-            result = await graph_task
-        except asyncio.CancelledError as error:
-            self._finish(record)
-            self._store.save(record)
-            raise ConversationRunCancelledError("run was cancelled by the user") from error
-        except Exception:
-            self._finish(record)
-            self._store.save(record)
-            raise
-        finally:
-            self._active_tasks.pop(task_key, None)
-        return self._complete_or_wait(record, run_id, result)
+            task_key = (conversation_id, run_id)
+            graph_task = asyncio.create_task(agent_loop.ainvoke(state))
+            self._active_tasks[task_key] = graph_task
+            try:
+                result = await graph_task
+            except asyncio.CancelledError as error:
+                self._finish(record)
+                self._store.save(record)
+                raise ConversationRunCancelledError("run was cancelled by the user") from error
+            except Exception:
+                self._finish(record)
+                self._store.save(record)
+                raise
+            finally:
+                self._active_tasks.pop(task_key, None)
+            completed = self._complete_or_wait(record, run_id, result)
+            outcome["status"] = completed.status.value
+            outcome["message_count"] = len(completed.messages)
+            return completed
 
     async def cancel_run(
         self,
@@ -274,11 +306,24 @@ class ConversationService:
         if task is None:
             raise RunNotFoundError("active run task is unavailable in this process")
 
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        self._finish(record)
-        self._store.save(record)
-        return record
+        current_trace_id = log.context_fields().get("trace_id")
+        trace_id = (
+            current_trace_id if isinstance(current_trace_id, str) else new_trace_id()
+        )
+        with (
+            log.bind(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                thread_id=conversation_id,
+                run_id=run_id,
+            ),
+            log.operation("agent.run.cancel"),
+        ):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._finish(record)
+            self._store.save(record)
+            return record
 
     async def resume_permission(
         self,
@@ -299,19 +344,35 @@ class ConversationService:
         ):
             raise RunNotFoundError("run is not waiting for permission")
 
-        record.status = ConversationStatus.RUNNING
-        record.permission_request = None
-        self._store.save(record)
-        try:
-            result = await self._get_agent_loop(user_id).aresume(
-                conversation_id,
-                approval,
-            )
-        except Exception:
-            self._finish(record)
+        current_trace_id = log.context_fields().get("trace_id")
+        trace_id = (
+            current_trace_id if isinstance(current_trace_id, str) else new_trace_id()
+        )
+        with (
+            log.bind(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                thread_id=conversation_id,
+                run_id=run_id,
+            ),
+            log.operation("agent.run.resume") as outcome,
+        ):
+            record.status = ConversationStatus.RUNNING
+            record.permission_request = None
             self._store.save(record)
-            raise
-        return self._complete_or_wait(record, run_id, result)
+            try:
+                result = await self._get_agent_loop(user_id).aresume(
+                    conversation_id,
+                    approval,
+                )
+            except Exception:
+                self._finish(record)
+                self._store.save(record)
+                raise
+            completed = self._complete_or_wait(record, run_id, result)
+            outcome["status"] = completed.status.value
+            outcome["message_count"] = len(completed.messages)
+            return completed
 
     def _owned_conversation(
         self,
