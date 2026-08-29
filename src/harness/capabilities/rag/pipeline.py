@@ -5,6 +5,7 @@ Framework-independent RAG query pipeline.
 
 from harness.capabilities.rag.citations import create_citations, render_context
 from harness.capabilities.rag.contracts import (
+    DocumentCatalog,
     RetrievalHit,
     RetrievalQuery,
     RetrievalResult,
@@ -18,11 +19,17 @@ log = AgentLog(__name__)
 class RAGPipeline:
     """完成稳定排序、去重、阈值、预算和引用生成。"""
 
-    def __init__(self, retriever: Retriever, max_context_characters: int = 12_000) -> None:
+    def __init__(
+        self,
+        retriever: Retriever,
+        max_context_characters: int = 12_000,
+        catalog: DocumentCatalog | None = None,
+    ) -> None:
         if max_context_characters < 1:
             raise ValueError("max_context_characters must be positive")
         self.retriever = retriever
         self.max_context_characters = max_context_characters
+        self.catalog = catalog
 
     def search(self, query: RetrievalQuery) -> RetrievalResult:
         """执行一次有界检索；无结果时绝不生成引用。"""

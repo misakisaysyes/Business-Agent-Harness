@@ -23,7 +23,7 @@ Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent
 
 第二阶段在第一阶段 Harness 上增加了可关闭、可替换的知识检索能力：
 
-- **可重复入库**：支持 Markdown/TXT、Frontmatter、稳定切分、批量 Embedding、增量更新和重建索引。
+- **可重复入库**：支持 DOCX/Markdown/TXT、标题和表格提取、Frontmatter、稳定切分、批量 Embedding、增量更新和重建索引。
 - **隔离检索**：公共知识与当前用户私有知识统一召回，用户 Scope 由 Runtime 绑定，模型不能传入或覆盖身份。
 - **真实引用**：检索结果经过排序、去重、阈值和上下文预算控制，并生成可定位到来源、章节和 Chunk 的 `[S1]` 引用。
 - **独立技术实现**：业务 Tool 只调用通用 RAG Pipeline，Embedding 与 PostgreSQL/pgvector 适配保留在 `services/rag/`。

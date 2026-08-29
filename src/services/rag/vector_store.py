@@ -13,6 +13,8 @@ from pydantic import JsonValue
 
 from harness.capabilities.rag import (
     AccessScope,
+    DocumentCatalogEntry,
+    DocumentCatalogQuery,
     DocumentChunk,
     DocumentIndexState,
     EmbeddingProvider,
@@ -99,6 +101,61 @@ class InMemoryVectorStore:
                 self._records[chunk.chunk_id] = (chunk, tuple(float(value) for value in vector))
             self._states[state.document_id] = state
             self._configuration = configuration
+
+    def list_documents(
+        self,
+        query: DocumentCatalogQuery,
+        access_scope: AccessScope,
+    ) -> tuple[DocumentCatalogEntry, ...]:
+        with self._lock:
+            grouped: dict[str, list[DocumentChunk]] = {}
+            for chunk, _ in self._records.values():
+                if not _scope_allows(chunk.metadata, access_scope):
+                    continue
+                source = str(chunk.metadata.get("source", ""))
+                if query.source_contains is not None and query.source_contains.casefold() not in (
+                    source.casefold()
+                ):
+                    continue
+                if query.title_contains is not None and query.title_contains.casefold() not in str(
+                    chunk.metadata.get("title", "")
+                ).casefold():
+                    continue
+                if query.category is not None and chunk.metadata.get("category") != query.category:
+                    continue
+                if query.tags and not _metadata_matches(
+                    chunk.metadata, {"tags": list(query.tags)}
+                ):
+                    continue
+                document_id = chunk.metadata.get("document_id")
+                if isinstance(document_id, str):
+                    grouped.setdefault(document_id, []).append(chunk)
+
+        entries = [
+            self._catalog_entry(chunks)
+            for chunks in grouped.values()
+            if chunks
+        ]
+        entries.sort(key=lambda entry: (entry.source, entry.document_id))
+        return tuple(entries[: query.limit])
+
+    @staticmethod
+    def _catalog_entry(chunks: Sequence[DocumentChunk]) -> DocumentCatalogEntry:
+        first = chunks[0]
+        metadata = first.metadata
+        source = str(metadata.get("source", first.document_id))
+        return DocumentCatalogEntry(
+            document_id=first.document_id,
+            source=source,
+            title=str(metadata.get("title", source)),
+            scope=str(metadata.get("scope", "unknown")),
+            user_id=(
+                str(metadata["user_id"])
+                if metadata.get("user_id") is not None
+                else None
+            ),
+            chunk_count=len(chunks),
+        )
 
     def search(
         self,
@@ -245,6 +302,91 @@ class LangChainPGVectorStore:
             splitter_version=row["splitter_version"],
             chunk_ids=tuple(chunk_ids),
         )
+
+    def list_documents(
+        self,
+        query: DocumentCatalogQuery,
+        access_scope: AccessScope,
+    ) -> tuple[DocumentCatalogEntry, ...]:
+        source_contains = query.source_contains or ""
+        title_contains = query.title_contains or ""
+        statement = self._text(
+            """
+            SELECT
+                embedding.cmetadata->>'document_id' AS document_id,
+                embedding.cmetadata->>'source' AS source,
+                COALESCE(embedding.cmetadata->>'title', embedding.cmetadata->>'source') AS title,
+                embedding.cmetadata->>'scope' AS scope,
+                embedding.cmetadata->>'user_id' AS user_id,
+                COUNT(*) AS chunk_count
+            FROM langchain_pg_embedding AS embedding
+            JOIN langchain_pg_collection AS collection
+              ON collection.uuid = embedding.collection_id
+            WHERE collection.name = :collection_name
+              AND embedding.cmetadata->>'document_id' IS NOT NULL
+              AND (
+                    (:include_public = TRUE AND embedding.cmetadata->>'scope' = 'public')
+                    OR (
+                        CAST(:user_id AS TEXT) IS NOT NULL
+                        AND embedding.cmetadata->>'scope' = 'user'
+                        AND embedding.cmetadata->>'user_id' = CAST(:user_id AS TEXT)
+                    )
+              )
+              AND (
+                    :source_contains = ''
+                    OR embedding.cmetadata->>'source' ILIKE :source_pattern
+              )
+              AND (
+                    :title_contains = ''
+                    OR COALESCE(embedding.cmetadata->>'title', embedding.cmetadata->>'source')
+                       ILIKE :title_pattern
+              )
+              AND (
+                    CAST(:category AS TEXT) IS NULL
+                    OR embedding.cmetadata->>'category' = CAST(:category AS TEXT)
+              )
+              AND (
+                    :tags_json = '[]'
+                    OR COALESCE(embedding.cmetadata->'tags', '[]'::jsonb)
+                       @> CAST(:tags_json AS JSONB)
+              )
+            GROUP BY
+                embedding.cmetadata->>'document_id',
+                embedding.cmetadata->>'source',
+                COALESCE(embedding.cmetadata->>'title', embedding.cmetadata->>'source'),
+                embedding.cmetadata->>'scope',
+                embedding.cmetadata->>'user_id'
+            ORDER BY source, document_id
+            LIMIT :limit
+            """
+        )
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                statement,
+                {
+                    "collection_name": self.collection_name,
+                    "include_public": access_scope.include_public,
+                    "user_id": access_scope.user_id,
+                    "source_contains": source_contains,
+                    "source_pattern": f"%{source_contains}%",
+                    "title_contains": title_contains,
+                    "title_pattern": f"%{title_contains}%",
+                    "category": query.category,
+                    "tags_json": json.dumps(list(query.tags)),
+                    "limit": query.limit,
+                },
+            ).mappings()
+            return tuple(
+                DocumentCatalogEntry(
+                    document_id=row["document_id"],
+                    source=row["source"],
+                    title=row["title"] or row["source"],
+                    scope=row["scope"] or "unknown",
+                    user_id=row["user_id"],
+                    chunk_count=int(row["chunk_count"]),
+                )
+                for row in rows
+            )
 
     def replace_document(
         self,

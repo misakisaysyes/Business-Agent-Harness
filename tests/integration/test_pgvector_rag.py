@@ -6,7 +6,12 @@ from collections.abc import Sequence
 
 import pytest
 
-from harness.capabilities.rag import AccessScope, DocumentChunk, DocumentIndexState
+from harness.capabilities.rag import (
+    AccessScope,
+    DocumentCatalogQuery,
+    DocumentChunk,
+    DocumentIndexState,
+)
 from services.rag.vector_store import LangChainPGVectorStore
 
 
@@ -56,6 +61,19 @@ def test_pgvector_persists_top_k_and_filters_user_scope() -> None:
 
         assert {hit.chunk.chunk_id for hit in hits} == {"public", "alice"}
         assert reopened.get_document_state("alice-doc") is not None
+        catalog_entries = reopened.list_documents(
+            DocumentCatalogQuery(source_contains="public", limit=10),
+            AccessScope(user_id="alice"),
+        )
+        assert [entry.source for entry in catalog_entries] == ["public.md"]
+        visible_sources = {
+            entry.source
+            for entry in reopened.list_documents(
+                DocumentCatalogQuery(limit=10),
+                AccessScope(user_id="alice"),
+            )
+        }
+        assert visible_sources == {"public.md", "alice.md"}
     finally:
         store.delete_collection()
 

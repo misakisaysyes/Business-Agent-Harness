@@ -4,6 +4,7 @@ Knowledge Assistant business tools.
 """
 
 from business.knowledge_assistant.tools.calculator import CalculatorInput, CalculatorTool
+from business.knowledge_assistant.tools.document_catalog import DocumentCatalogTool
 from business.knowledge_assistant.tools.document_search import (
     DocumentSearchInput,
     DocumentSearchTool,
@@ -16,6 +17,7 @@ __all__ = [
     "CalculatorTool",
     "DocumentSearchInput",
     "DocumentSearchTool",
+    "DocumentCatalogTool",
     "FileReaderInput",
     "FileReaderTool",
     "ReportWriterInput",

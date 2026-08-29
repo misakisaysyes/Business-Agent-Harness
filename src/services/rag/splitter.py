@@ -31,7 +31,7 @@ class TextSplitterConfig:
 
 
 class DocumentSplitter:
-    """Markdown 标题优先、递归字符长度兜底的确定性切分器。"""
+    """Markdown/DOCX 标题优先、递归字符长度兜底的确定性切分器。"""
 
     def __init__(self, config: TextSplitterConfig | None = None) -> None:
         self.config = config or TextSplitterConfig()
@@ -78,7 +78,7 @@ class DocumentSplitter:
 
     @staticmethod
     def _sections(document: SourceDocument) -> tuple[tuple[str, str], ...]:
-        if not document.source.casefold().endswith(".md"):
+        if not document.source.casefold().endswith((".docx", ".md")):
             title = document.metadata.get("title", document.source)
             return ((str(title), document.text),)
 

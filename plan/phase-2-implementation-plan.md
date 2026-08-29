@@ -183,7 +183,7 @@ version: "2026-08"
 ### 5.3 入库流程
 
 ```text
-扫描 .md/.txt
+扫描 .docx/.md/.txt
   ↓
 读取正文与 frontmatter
   ↓
@@ -389,7 +389,7 @@ System Prompt 要求：
 
 | 能力 | 自动验证 | 手工验证 | 通过标准 |
 | --- | --- | --- | --- |
-| 文档加载与切分 | Markdown/TXT、边界和稳定性测试 | 检查入库统计 | Chunk 非空且来源可定位 |
+| 文档加载与切分 | DOCX/Markdown/TXT、边界和稳定性测试 | 检查入库统计 | Chunk 非空且来源可定位 |
 | 增量索引 | 重复、更新和旧版本测试 | 修改文档后重建 | 旧 Chunk 不再命中 |
 | Embedding | Fake 批处理和维度测试 | 本地模型完成向量化 | 不混用不同维度 |
 | pgvector | Collection 集成测试 | 重启后继续检索 | 数据持久且 Top-K 正确 |
@@ -434,7 +434,7 @@ System Prompt 要求：
 
 只有以下条件全部满足，才进入第三阶段 Agent Teams：
 
-- Markdown/TXT 可以通过 CLI 完成可重复入库和更新。
+- DOCX/Markdown/TXT 可以通过 CLI 完成可重复入库和更新。
 - Knowledge Assistant 可以调用 `document_search` 并生成可定位引用。
 - 公共知识共享、用户私有知识隔离，跨用户命中数为 0。
 - 无结果时明确说明，不构造虚假 Citation。

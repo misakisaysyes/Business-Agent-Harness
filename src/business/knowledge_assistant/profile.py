@@ -8,6 +8,7 @@ from pathlib import Path
 from business.knowledge_assistant.context import KnowledgeAssistantContextProvider
 from business.knowledge_assistant.permission_rules import (
     CalculatorPermissionRule,
+    DocumentCatalogPermissionRule,
     DocumentSearchPermissionRule,
     ExternalPublishPermissionRule,
     FileReadPermissionRule,
@@ -16,6 +17,7 @@ from business.knowledge_assistant.permission_rules import (
 from business.knowledge_assistant.system_prompt import get_system_prompt
 from business.knowledge_assistant.tools import (
     CalculatorTool,
+    DocumentCatalogTool,
     DocumentSearchTool,
     FileReaderTool,
     ReportWriterTool,
@@ -131,11 +133,19 @@ def create_knowledge_assistant_profile(
                 default_top_k=rag_top_k,
                 score_threshold=rag_score_threshold,
             ),
+            DocumentCatalogTool(rag_pipeline.catalog, rag_access_scope)
+            if rag_pipeline.catalog is not None
+            else None,
         )
         if rag_pipeline is not None and rag_access_scope is not None
         else ()
     )
-    rag_rules = (DocumentSearchPermissionRule(),) if rag_tools else ()
+    rag_tools = tuple(tool for tool in rag_tools if tool is not None)
+    rag_rules = (
+        (DocumentSearchPermissionRule(), DocumentCatalogPermissionRule())
+        if rag_tools
+        else ()
+    )
 
     return AgentProfile(
         name=BUSINESS_AGENT_NAME,

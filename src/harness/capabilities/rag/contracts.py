@@ -57,6 +57,27 @@ class DocumentIndexState(RAGModel):
     chunk_ids: tuple[str, ...] = ()
 
 
+class DocumentCatalogQuery(RAGModel):
+    """用于文档枚举和统计的结构化过滤条件。"""
+
+    source_contains: str | None = Field(default=None, max_length=512)
+    title_contains: str | None = Field(default=None, max_length=512)
+    category: str | None = Field(default=None, max_length=128)
+    tags: tuple[str, ...] = Field(default=(), max_length=20)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class DocumentCatalogEntry(RAGModel):
+    """一个已授权、去重后的文档目录条目。"""
+
+    document_id: str = Field(min_length=1, max_length=128)
+    source: str = Field(min_length=1, max_length=1_024)
+    title: str = Field(min_length=1, max_length=1_024)
+    scope: str = Field(min_length=1, max_length=16)
+    user_id: str | None = Field(default=None, max_length=64)
+    chunk_count: int = Field(ge=1)
+
+
 class RetrievalQuery(RAGModel):
     """一次带可信访问范围和有界参数的检索请求。"""
 
@@ -109,7 +130,18 @@ class EmbeddingProvider(Protocol):
 
 
 @runtime_checkable
-class VectorStore(Protocol):
+class DocumentCatalog(Protocol):
+    """按可信访问范围枚举文档的最小目录协议。"""
+
+    def list_documents(
+        self,
+        query: DocumentCatalogQuery,
+        access_scope: AccessScope,
+    ) -> Sequence[DocumentCatalogEntry]: ...
+
+
+@runtime_checkable
+class VectorStore(DocumentCatalog, Protocol):
     """入库与检索共用的最小向量存储协议。"""
 
     def get_document_state(self, document_id: str) -> DocumentIndexState | None: ...
@@ -141,6 +173,9 @@ __all__ = [
     "AccessScope",
     "Citation",
     "DocumentChunk",
+    "DocumentCatalogEntry",
+    "DocumentCatalogQuery",
+    "DocumentCatalog",
     "DocumentIndexState",
     "EmbeddingProvider",
     "RetrievalHit",

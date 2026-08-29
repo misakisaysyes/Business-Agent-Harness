@@ -5,6 +5,7 @@ Markdown/TXT loading, document ingestion, and incremental indexing.
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -23,7 +24,7 @@ from services.rag.splitter import DocumentSplitter
 
 log = AgentLog(__name__)
 
-SUPPORTED_SUFFIXES = frozenset({".md", ".txt"})
+SUPPORTED_SUFFIXES = frozenset({".docx", ".md", ".txt"})
 RESERVED_METADATA = frozenset(
     {
         "document_id",
@@ -75,6 +76,38 @@ def _parse_markdown(text: str) -> tuple[str, dict[str, JsonValue]]:
     return text[closing + 5 :], metadata
 
 
+def _parse_docx(path: Path) -> tuple[str, dict[str, JsonValue]]:
+    """Extract body paragraphs and tables while preserving heading structure."""
+
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    document = Document(str(path))
+    blocks: list[str] = []
+    for element in document.element.body.iterchildren():
+        if element.tag == qn("w:p"):
+            paragraph = Paragraph(element, document)
+            text = paragraph.text.strip()
+            if not text:
+                continue
+            match = re.search(r"heading\s*([1-6])$", paragraph.style.name.casefold())
+            blocks.append(f"{'#' * int(match.group(1))} {text}" if match else text)
+        elif element.tag == qn("w:tbl"):
+            table = Table(element, document)
+            for row in table.rows:
+                cells = [" ".join(cell.text.split()) for cell in row.cells]
+                if any(cells):
+                    blocks.append(" | ".join(cells))
+
+    metadata: dict[str, JsonValue] = {}
+    title = document.core_properties.title
+    if title and title.strip():
+        metadata["title"] = title.strip()
+    return "\n\n".join(blocks), metadata
+
+
 def _document_id(
     knowledge_base_id: str,
     scope: Literal["public", "user"],
@@ -112,10 +145,13 @@ def load_source_documents(
             continue
         if path.suffix.casefold() not in SUPPORTED_SUFFIXES:
             continue
-        text = path.read_text(encoding="utf-8")
         metadata: dict[str, JsonValue] = {}
-        if path.suffix.casefold() == ".md":
-            text, metadata = _parse_markdown(text)
+        if path.suffix.casefold() == ".docx":
+            text, metadata = _parse_docx(path)
+        else:
+            text = path.read_text(encoding="utf-8")
+            if path.suffix.casefold() == ".md":
+                text, metadata = _parse_markdown(text)
         text = text.strip()
         if not text:
             continue

@@ -37,6 +37,7 @@ def create_rag_components(settings: RAGSettings) -> RAGComponents:
         retriever=retriever,
         pipeline=RAGPipeline(
             retriever,
+            catalog=store,
             max_context_characters=settings.max_context_characters,
         ),
     )

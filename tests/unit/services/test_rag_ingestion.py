@@ -73,6 +73,37 @@ def test_loader_parses_frontmatter_and_splitter_preserves_sections(tmp_path: Pat
     ).split(markdown)
 
 
+def test_loader_parses_docx_headings_tables_and_core_title(tmp_path: Path) -> None:
+    from docx import Document
+
+    path = tmp_path / "guide.docx"
+    document = Document()
+    document.core_properties.title = "Product Guide"
+    document.add_heading("Refunds", level=1)
+    document.add_paragraph("Apply in seven days.")
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "Product"
+    table.rows[0].cells[1].text = "Refundable"
+    document.save(path)
+
+    documents = load_source_documents(
+        tmp_path,
+        knowledge_base_id="kb",
+        scope="public",
+    )
+
+    assert len(documents) == 1
+    docx_document = documents[0]
+    assert docx_document.source == "guide.docx"
+    assert docx_document.metadata["title"] == "Product Guide"
+    assert "# Refunds" in docx_document.text
+    assert "Product | Refundable" in docx_document.text
+    chunks = DocumentSplitter(TextSplitterConfig(chunk_size=100, chunk_overlap=10)).split(
+        docx_document
+    )
+    assert {str(chunk.metadata["section"]) for chunk in chunks} == {"Refunds"}
+
+
 def test_ingestion_skips_unchanged_and_replaces_changed_document(tmp_path: Path) -> None:
     path = tmp_path / "guide.txt"
     path.write_text("refund policy version one", encoding="utf-8")
