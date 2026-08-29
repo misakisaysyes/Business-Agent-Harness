@@ -532,6 +532,10 @@ agent index knowledge-assistant ./src/business/knowledge_assistant/knowledge/doc
 
 ## 4.3 第三阶段：Agent Teams
 
+详细任务、验证方案和退出条件见[第三阶段实施计划](./phase-3-implementation-plan.md)。
+
+阶段状态：**计划中**。当前仅保留 Agent Teams 的目录和模块骨架，尚未接入 Agent Loop、Profile 和运行时。
+
 第一版采用 Lead Agent + Subagents/Teammates 模式，不直接构建完全自治的对等 Agent 网络。
 
 ```text
@@ -752,7 +756,29 @@ Assistant 的生产化阶段。
 | 代码检查 | Ruff + Pyright | Lint、格式和类型检查 | 默认采用 |
 | 本地部署 | Docker Compose | PostgreSQL、pgvector、Redis | 集成测试使用 |
 
-### 6.1 技术选择原则
+### 6.1 总体架构与技术选型映射
+
+总体架构按“入口、编排、工具、数据、协作、运维”六类能力选型：
+
+| 能力 | 技术选型 | 说明 |
+| --- | --- | --- |
+| 入口与服务 | Typer、Rich、HTTPX、FastAPI、Uvicorn | CLI Client/Indexer 通过 HTTP 使用 Agent Server；当前单进程运行 |
+| Agent 编排 | LangGraph `StateGraph`、LangChain | 负责 Agent Loop、Tool 路由、状态恢复和模型适配 |
+| 模型与安全 | Model Gateway、Pydantic、Permission Pipeline、Hooks | 统一模型重试/降级、工具校验、审批和审计 |
+| RAG 数据链路 | FastEmbed、`langchain-text-splitters`、PostgreSQL + pgvector | 完成文档入库、向量检索、权限过滤和 Citation |
+| 外部工具 | `langchain-mcp-adapters` | 统一接入 MCP；联网搜索需要额外配置 Web Search MCP Tool |
+| Agent Teams | LangGraph Subgraph、`asyncio.TaskGroup`、进程内 MessageBus | 第三阶段实现 Subagent、并行任务和审核；生产化再引入持久总线 |
+| 会话与产物 | SQLite Checkpoint/Conversation Index、本地文件系统 | 当前用于会话恢复、用户隔离和报告保存 |
+| 生产化存储与任务 | PostgreSQL、Redis、Worker、S3 兼容存储 | 第四阶段用于多 Worker、后台任务、索引更新和大文件产物 |
+| 可观测性与部署 | structlog、OpenTelemetry、Docker Compose | 当前结构化日志和本地部署；生产环境增加 Trace、Metrics 和告警 |
+
+需要保持三条边界：
+
+- `CLI Client` 是在线对话入口，`CLI Indexer` 是离线知识入库入口；两者共享项目配置，但不共享执行链路。
+- MCP 是外部工具协议，不等于联网搜索服务。只有配置了实际的 Web Search MCP Tool，`web` 和 `hybrid` 模式才具备联网能力。
+- PostgreSQL/pgvector 负责 RAG 数据，Conversation、Checkpoint、Task 和生产索引状态按阶段使用独立 Store 或逻辑隔离，避免把向量检索职责扩散到业务层。
+
+### 6.2 技术选择原则
 
 - 业务代码依赖通用协议，不直接依赖 LangGraph 节点对象。
 - 模型、Embedding、向量库和 Checkpointer 均通过接口注入。

@@ -19,15 +19,16 @@ Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent
 - **任务与 MCP 扩展**：支持任务生命周期和并发认领，将外部 MCP 工具统一接入权限与故障隔离机制。
 - **业务闭环验证**：`Knowledge Assistant` 已串联文件读取、计算、报告审批与生成、任务跟踪等典型流程。
 
-## 第二阶段 RAG 能力
+## 第二阶段项目亮点
 
-第二阶段在第一阶段 Harness 上增加了可关闭、可替换的知识检索能力：
+第二阶段在第一阶段 Harness 上完成了可关闭、可替换的 RAG 知识检索闭环，覆盖文档入库、授权检索、来源引用和增量更新，并通过 `Knowledge Assistant` 完成集成验证。
 
-- **可重复入库**：支持 DOCX/Markdown/TXT、标题和表格提取、Frontmatter、稳定切分、批量 Embedding、增量更新和重建索引。
-- **隔离检索**：公共知识与当前用户私有知识统一召回，用户 Scope 由 Runtime 绑定，模型不能传入或覆盖身份。
-- **真实引用**：检索结果经过排序、去重、阈值和上下文预算控制，并生成可定位到来源、章节和 Chunk 的 `[S1]` 引用。
-- **独立技术实现**：业务 Tool 只调用通用 RAG Pipeline，Embedding 与 PostgreSQL/pgvector 适配保留在 `services/rag/`。
-- **可选启用**：关闭 RAG 后不注册 `document_search`，第一阶段单 Agent 能力继续运行。
+- **多格式文档入库**：支持 DOCX/Markdown/TXT、标题和表格提取、Frontmatter、稳定切分、批量 Embedding、增量更新和重建索引。
+- **增量索引治理**：基于内容 Hash、Embedding 模型、向量维度、Splitter 版本和 Chunk ID 判断是否需要更新，避免重复处理未变化的文档。
+- **用户与知识隔离**：公共知识与当前用户私有知识统一召回，用户 Scope 由 Runtime 绑定，模型不能传入或覆盖身份。
+- **结构化目录查询**：通过 `document_catalog` 支持文档数量、枚举和精确元数据筛选，避免从有限的 Top-K 结果中错误统计全量文档。
+- **真实来源引用**：检索结果经过排序、去重、阈值和上下文预算控制，并生成可定位到来源、章节和 Chunk 的 `[S1]` 引用。
+- **可复用技术分层**：业务 Tool 只调用通用 RAG Pipeline，Embedding 与 PostgreSQL/pgvector 适配保留在 `services/rag/`，并支持关闭 RAG 后继续运行第一阶段单 Agent 能力。
 
 ## 系统架构
 
@@ -54,6 +55,10 @@ flowchart LR
     agentLoop --> mcpAdapter["MCP Adapter"]
     mcpAdapter -.-> mcpServers["Configured MCP Servers"]
 ```
+
+### 技术选型
+
+详细的总体架构与技术选型映射见[实施计划](./plan/implementation-plan.md#61-总体架构与技术选型映射)。
 
 ### 核心分层
 
@@ -167,24 +172,19 @@ CLI 内置命令：
 /exit                        退出
 ```
 
-`auto` 由路由策略决定；`rag` 只允许本地 RAG，`web` 禁止本地 RAG，`hybrid` 允许两者同时使用。
-`web` 和 `hybrid` 需要通过 MCP 配置联网搜索 Tool；未配置时 Agent 会明确说明联网部分不可用。
+#### `/search-mode` 检索模式说明
 
-检索模式说明：
+检索模式：`auto` 自动路由；`rag` 仅本地 RAG；`web` 仅联网搜索；`hybrid` 同时使用两者。
+其中 `web` 和 `hybrid` 需要通过 MCP 配置联网搜索 Tool。
 
-- `auto`：根据问题内容自动选择目录查询、RAG、联网搜索或组合检索。
-- `rag`：只检索已授权的本地知识库，适合个人记录、内部文档和历史资料。
-- `web`：只使用联网搜索，适合最新新闻、价格、行情等时效性问题。
-- `hybrid`：同时查询本地知识库和互联网，并在回答中区分两类证据。
-
-例如，在 CLI 中测试联网搜索：
+CLI 测试联网搜索：
 
 ```text
 /search-mode web
 最新黄金价格是多少？
 ```
 
-如果当前没有发现联网搜索 Tool，Agent 会拒绝使用本地 RAG，并明确提示联网能力不可用，避免使用过期记忆或编造实时数据。
+未配置联网搜索 Tool 时，Agent 不会调用本地 RAG 或编造实时数据，而会明确提示联网能力不可用。
 
 ### 启用 RAG
 
