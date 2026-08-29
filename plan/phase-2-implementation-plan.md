@@ -198,8 +198,10 @@ version: "2026-08"
 输出 indexed/skipped/deleted/failed 统计
 ```
 
-增量规则：`content_hash + embedding_model + splitter_version` 未变化时跳过；任一项变化时替换该
-Document 的全部 Chunk，避免旧版本继续命中。当天只提供同步 CLI Indexer，不引入 Worker。
+增量规则：`content_hash + embedding_model + embedding_dimension + splitter_version` 未变化时跳过；
+其中 `content_hash` 对正文和 frontmatter 的规范化内容共同计算，因此正文或 metadata 任一变化都会
+触发重建。任一项变化时替换该 Document 的全部 Chunk，避免旧版本继续命中。当天只提供同步 CLI
+Indexer，不引入 Worker。
 
 CLI 入口：
 

@@ -4,6 +4,7 @@ Markdown/TXT loading, document ingestion, and incremental indexing.
 """
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -119,7 +120,16 @@ def load_source_documents(
         if not text:
             continue
         source = relative.as_posix()
-        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        # The fingerprint covers both searchable text and frontmatter.  Metadata
+        # is persisted on every Chunk and can affect filtering, so a metadata-
+        # only change must not be treated as an unchanged document.
+        fingerprint = json.dumps(
+            {"metadata": metadata, "text": text},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        content_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
         document_id = _document_id(knowledge_base_id, scope, user_id, source)
         technical: dict[str, JsonValue] = {
             "document_id": document_id,

@@ -98,6 +98,43 @@ def test_ingestion_skips_unchanged_and_replaces_changed_document(tmp_path: Path)
     assert "version two" in hits[0].chunk.text
 
 
+def test_ingestion_reindexes_frontmatter_changes(tmp_path: Path) -> None:
+    path = tmp_path / "guide.md"
+    path.write_text(
+        "---\ntitle: Guide\ncategory: policy-v1\n---\nRefund policy",
+        encoding="utf-8",
+    )
+    embeddings = FakeEmbeddings()
+    store = InMemoryVectorStore()
+    service = IngestionService(
+        embeddings,
+        store,
+        DocumentSplitter(TextSplitterConfig(chunk_size=100, chunk_overlap=10)),
+        knowledge_base_id="kb",
+    )
+
+    first = service.index_directory(tmp_path, scope="public")
+    path.write_text(
+        "---\ntitle: Guide\ncategory: policy-v2\n---\nRefund policy",
+        encoding="utf-8",
+    )
+    second = service.index_directory(tmp_path, scope="public")
+
+    assert first.indexed == 1
+    assert second.indexed == 1
+    assert second.skipped == 0
+    assert second.deleted_chunks == 1
+    document_id = load_source_documents(
+        tmp_path,
+        knowledge_base_id="kb",
+        scope="public",
+    )[0].document_id
+    hits = store.search((1.0, 0.0, 1.0), AccessScope(), 5, {})
+    assert len(hits) == 1
+    assert hits[0].chunk.document_id == document_id
+    assert hits[0].chunk.metadata["category"] == "policy-v2"
+
+
 def test_vector_store_enforces_public_and_current_user_scope() -> None:
     store = InMemoryVectorStore()
     chunks = (
