@@ -10,6 +10,7 @@ from business.knowledge_assistant.permission_rules import (
     ExternalPublishPermissionRule,
     FileReadPermissionRule,
     ReportWritePermissionRule,
+    SearchModePermissionRule,
 )
 from business.knowledge_assistant.tools import FileReaderTool
 from harness.messages import Message, MessageRole, ToolUse
@@ -136,3 +137,24 @@ async def test_calculator_is_allowed_and_external_publish_is_denied() -> None:
 
     assert calculator.decision is PermissionDecision.ALLOW
     assert publish.decision is PermissionDecision.DENY
+
+
+async def test_search_mode_denies_the_opposite_search_source() -> None:
+    pipeline = PermissionPipeline(
+        (SearchModePermissionRule(),),
+        known_tool_names=("document_search", "web_search"),
+    )
+    rag_state = {**state(), "metadata": {"search_mode": "rag"}}
+    web_state = {**state(), "metadata": {"search_mode": "web"}}
+
+    rag_denied = await pipeline.evaluate(
+        ToolUse(id="web-1", name="web_search"),
+        rag_state,
+    )
+    web_denied = await pipeline.evaluate(
+        ToolUse(id="rag-1", name="document_search"),
+        web_state,
+    )
+
+    assert rag_denied.decision is PermissionDecision.DENY
+    assert web_denied.decision is PermissionDecision.DENY

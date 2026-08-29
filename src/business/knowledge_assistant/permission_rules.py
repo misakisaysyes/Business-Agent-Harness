@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from business.knowledge_assistant.search_routing import is_web_search_tool_name
 from business.knowledge_assistant.tools.file_reader import FileReaderInput, FileReaderTool
 from business.knowledge_assistant.tools.report_writer import ReportWriterInput
 from harness.messages import ToolUse
@@ -71,6 +72,31 @@ class DocumentCatalogPermissionRule:
             decision=PermissionDecision.ALLOW,
             reason="document catalog is read-only and its access scope is runtime-bound",
         )
+
+
+class SearchModePermissionRule:
+    """阻止强制检索模式调用相反来源的搜索 Tool。"""
+
+    name = "search_mode_policy"
+    _RAG_TOOLS = frozenset({"document_search", "document_catalog"})
+
+    async def evaluate(
+        self,
+        tool_use: ToolUse,
+        state: AgentState,
+    ) -> PermissionResult | PermissionDecision:
+        mode = state.get("metadata", {}).get("search_mode", "auto")
+        if mode == "rag" and is_web_search_tool_name(tool_use.name):
+            return PermissionResult(
+                decision=PermissionDecision.DENY,
+                reason="search mode is forced to rag; web search is disabled",
+            )
+        if mode == "web" and tool_use.name in self._RAG_TOOLS:
+            return PermissionResult(
+                decision=PermissionDecision.DENY,
+                reason="search mode is forced to web; local RAG search is disabled",
+            )
+        return PermissionDecision.PASSTHROUGH
 
 
 class FileReadPermissionRule:
@@ -191,4 +217,5 @@ __all__ = [
     "ExternalPublishPermissionRule",
     "FileReadPermissionRule",
     "ReportWritePermissionRule",
+    "SearchModePermissionRule",
 ]

@@ -13,7 +13,9 @@ from business.knowledge_assistant.permission_rules import (
     ExternalPublishPermissionRule,
     FileReadPermissionRule,
     ReportWritePermissionRule,
+    SearchModePermissionRule,
 )
+from business.knowledge_assistant.search_routing import SearchRoutingContextProvider
 from business.knowledge_assistant.system_prompt import get_system_prompt
 from business.knowledge_assistant.tools import (
     CalculatorTool,
@@ -169,6 +171,7 @@ def create_knowledge_assistant_profile(
             ),
             ReportWritePermissionRule(artifact_store),
             ExternalPublishPermissionRule(),
+            *((SearchModePermissionRule(),) if rag_tools else ()),
             TodoWritePermissionRule(),
             LoadSkillPermissionRule(),
             TaskSystemPermissionRule(),
@@ -181,7 +184,10 @@ def create_knowledge_assistant_profile(
             LargeOutputWarningHook(),
             StopMetricsHook(),
         ),
-        context_providers=(KnowledgeAssistantContextProvider(knowledge_roots),),
+        context_providers=(
+            KnowledgeAssistantContextProvider(knowledge_roots),
+            *((SearchRoutingContextProvider(),) if rag_tools else ()),
+        ),
         skill_summaries=active_skill_catalog.summaries(),
         memory_provider=(
             MemoryPromptProvider(memory_store, memory_config)

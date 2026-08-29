@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 import entrypoints.cli as cli_module
+from business.knowledge_assistant.search_routing import SearchMode
 from entrypoints.cli import (
     AgentServerClient,
     ConversationDetail,
@@ -34,6 +35,7 @@ class FakeAgentServerClient:
     created_with: tuple[str, str] | None = None
     closed = False
     sent_messages: list[tuple[str, str, str | None]] = []
+    search_modes: list[SearchMode] = []
 
     def __init__(self, server_url: str, user_id: str) -> None:
         type(self).created_with = (server_url, user_id)
@@ -53,8 +55,10 @@ class FakeAgentServerClient:
         conversation_id: str,
         content: str,
         required_tool: str | None = None,
+        search_mode: SearchMode = SearchMode.AUTO,
     ) -> dict[str, Any]:
         type(self).sent_messages.append((conversation_id, content, required_tool))
+        type(self).search_modes.append(search_mode)
         return {
             "conversation_id": conversation_id,
             "run_id": "run-001",
@@ -196,6 +200,7 @@ class ConversationManagementClient:
         conversation_id: str,
         content: str,
         required_tool: str | None = None,
+        search_mode: SearchMode = SearchMode.AUTO,
     ) -> dict[str, Any]:
         raise AssertionError("messages should not be sent in this test")
 
@@ -560,6 +565,27 @@ def test_cli_test_command_forces_tool_skill_and_mcp(monkeypatch) -> None:
         "mcp__demo_server__lookup",
     ]
     assert 'name 严格设置为 "knowledge-synthesis"' in FakeAgentServerClient.sent_messages[1][1]
+
+
+def test_cli_search_mode_is_sent_with_each_message(monkeypatch) -> None:
+    """CLI 的检索模式命令应影响后续消息。"""
+
+    FakeAgentServerClient.search_modes = []
+    monkeypatch.setattr(cli_module, "AgentServerClient", FakeAgentServerClient)
+
+    result = CliRunner().invoke(
+        app,
+        ["chat", "--user", "alice"],
+        input=(
+            "/search-mode rag\n我面了字节几次？\n"
+            "/search-mode hybrid\n比较内部经历和当前趋势\n/quit\n"
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "Search mode: rag" in result.stdout
+    assert "Search mode: hybrid" in result.stdout
+    assert FakeAgentServerClient.search_modes == [SearchMode.RAG, SearchMode.HYBRID]
 
 
 def test_cli_creates_a_replacement_after_deleting_current_conversation(

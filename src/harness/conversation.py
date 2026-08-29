@@ -209,6 +209,7 @@ class ConversationService:
         conversation_id: str,
         content: str,
         required_tool: str | None = None,
+        search_mode: str = "auto",
     ) -> ConversationRunResult:
         """执行一条用户消息；同一 Conversation 有活跃 Run 时立即拒绝。
 
@@ -217,6 +218,8 @@ class ConversationService:
 
         if not content.strip():
             raise InvalidConversationInputError("message content must not be empty")
+        if search_mode not in {"auto", "rag", "web", "hybrid"}:
+            raise InvalidConversationInputError(f"unsupported search mode: {search_mode}")
 
         agent_loop = self._get_agent_loop(user_id)
         if required_tool is not None and required_tool not in agent_loop.tool_names:
@@ -251,12 +254,14 @@ class ConversationService:
                 "agent.run",
                 message_count=1,
                 required_tool=required_tool,
+                search_mode=search_mode,
             ) as outcome,
         ):
             metadata: dict[str, JsonValue] = {
                 "user_id": user_id,
                 "run_id": run_id,
                 "trace_id": trace_id,
+                "search_mode": search_mode,
             }
             if required_tool is not None:
                 metadata["required_tool"] = required_tool

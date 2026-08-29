@@ -160,11 +160,31 @@ CLI 内置命令：
 /delete <ID>                 删除 Conversation
 /cancel <ID>                 取消运行中的 Run
 /usage                       查看 Token 用量
+/search-mode auto|rag|web|hybrid 设置当前会话的检索模式
 /skills                      查看可用 Skill
 /mcp                         查看 MCP Server 和工具
 /test tool|skill|mcp ...     强制测试指定能力
 /exit                        退出
 ```
+
+`auto` 由路由策略决定；`rag` 只允许本地 RAG，`web` 禁止本地 RAG，`hybrid` 允许两者同时使用。
+`web` 和 `hybrid` 需要通过 MCP 配置联网搜索 Tool；未配置时 Agent 会明确说明联网部分不可用。
+
+检索模式说明：
+
+- `auto`：根据问题内容自动选择目录查询、RAG、联网搜索或组合检索。
+- `rag`：只检索已授权的本地知识库，适合个人记录、内部文档和历史资料。
+- `web`：只使用联网搜索，适合最新新闻、价格、行情等时效性问题。
+- `hybrid`：同时查询本地知识库和互联网，并在回答中区分两类证据。
+
+例如，在 CLI 中测试联网搜索：
+
+```text
+/search-mode web
+最新黄金价格是多少？
+```
+
+如果当前没有发现联网搜索 Tool，Agent 会拒绝使用本地 RAG，并明确提示联网能力不可用，避免使用过期记忆或编造实时数据。
 
 ### 启用 RAG
 
@@ -257,6 +277,26 @@ AGENT_MCP__SERVERS={"remote_demo":{"transport":"streamable_http","url":"https://
 ```
 
 MCP 工具会在 Agent Server 初始化时发现一次，之后通过 `/mcp` 或 CLI 的 `/mcp` 查看结果。修改配置后需要重启 Server。
+
+联网搜索也通过 MCP 接入。需要配置一个实际提供搜索能力的 MCP Server，并确保它暴露名称包含
+`web_search`、`internet_search`、`browser_search` 或 `search_web` 的 Tool。项目不会把当前
+Codex/开发环境的浏览器能力自动注入 Agent Server。
+
+配置完成后，可按以下步骤确认：
+
+```bash
+uv run agent serve
+uv run agent chat --user alice
+```
+
+```text
+/mcp
+/search-mode web
+最新黄金价格是多少？
+```
+
+`/mcp` 应显示已发现的联网搜索 Tool；修改 MCP 配置后必须重启 Agent Server。不要把 API Key
+直接提交到 Git，建议通过本地 `.env` 或部署环境的 Secret 注入。
 
 ### 测试与质量检查
 

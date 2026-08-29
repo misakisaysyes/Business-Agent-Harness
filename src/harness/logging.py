@@ -71,6 +71,7 @@ SAFE_LOG_FIELDS = frozenset(
         "run_id",
         "scope",
         "score_threshold",
+        "search_mode",
         "selected_count",
         "server_name",
         "skipped_count",

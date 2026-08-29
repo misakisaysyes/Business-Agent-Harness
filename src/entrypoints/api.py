@@ -98,6 +98,7 @@ class SendMessageRequest(BaseModel):
         min_length=1,
         pattern=r"^[a-zA-Z_][a-zA-Z0-9_-]*$",
     )
+    search_mode: Literal["auto", "rag", "web", "hybrid"] = "auto"
 
 
 class ModelGatewayEventResponse(BaseModel):
@@ -327,6 +328,7 @@ def create_app(application: AgentApplication | None = None) -> FastAPI:
                     conversation_id,
                     request.content,
                     request.required_tool,
+                    request.search_mode,
                 )
         except Exception as error:
             agent.usage_ledger.record(user_id, usages)

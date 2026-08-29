@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal, cast
 import httpx
 import typer
 
+from business.knowledge_assistant.search_routing import SearchMode
 from services.config import get_settings
 from services.model_gateway import ModelGatewayEvent, ModelGatewayEventType
 from services.observability import configure_logging
@@ -167,8 +168,9 @@ class AgentServerClient:
         conversation_id: str,
         content: str,
         required_tool: str | None = None,
+        search_mode: SearchMode = SearchMode.AUTO,
     ) -> dict[str, Any]:
-        body: dict[str, str] = {"content": content}
+        body: dict[str, str] = {"content": content, "search_mode": search_mode.value}
         if required_tool is not None:
             body["required_tool"] = required_tool
         response = self._client.post(
@@ -380,14 +382,16 @@ def chat(
     try:
         conversation = client.create_conversation()
         conversation_id = conversation.conversation_id
+        search_mode = SearchMode.AUTO
         typer.echo(f"Conversation: {conversation_id}")
         if message is not None:
-            _execute_message(client, conversation, message)
+            _execute_message(client, conversation, message, search_mode=search_mode)
             return
 
         typer.echo(
             "输入 /new 新建、/list 查看、/switch <ID> 切换、"
             "/delete <ID> 删除、/cancel <ID> 取消运行、/usage 查看用量、"
+            "/search-mode auto|rag|web|hybrid 设置检索模式、"
             "/skills 查看 Skill、/mcp 查看 MCP、/test 测试能力、"
             "/exit 或 /quit 退出。"
         )
@@ -399,7 +403,16 @@ def chat(
             if command == "/new":
                 conversation = client.create_conversation()
                 conversation_id = conversation.conversation_id
+                search_mode = SearchMode.AUTO
                 typer.echo(f"Conversation: {conversation_id}")
+                continue
+            if command.startswith("/search-mode"):
+                selected_mode = _parse_search_mode(user_message)
+                if selected_mode is None:
+                    typer.echo("Usage: /search-mode auto|rag|web|hybrid", err=True)
+                else:
+                    search_mode = selected_mode
+                    typer.echo(f"Search mode: {search_mode.value}")
                 continue
             if command == "/list":
                 _show_conversations(client.list_conversations(), conversation_id)
@@ -448,6 +461,7 @@ def chat(
                     conversation,
                     content,
                     required_tool=required_tool,
+                    search_mode=search_mode,
                 )
                 continue
             if command.startswith("/switch"):
@@ -476,6 +490,7 @@ def chat(
                     primary_model=conversation.primary_model,
                 )
                 conversation_id = target.conversation_id
+                search_mode = SearchMode.AUTO
                 typer.echo(f"Switched to conversation [{_conversation_suffix(conversation_id)}]")
                 if target.status == "waiting_permission":
                     detail = client.get_conversation(conversation_id)
@@ -520,6 +535,7 @@ def chat(
                 if target.conversation_id == conversation_id:
                     conversation = client.create_conversation()
                     conversation_id = conversation.conversation_id
+                    search_mode = SearchMode.AUTO
                     typer.echo(f"Conversation: {conversation_id}")
                 continue
             if command.startswith("/cancel"):
@@ -544,7 +560,7 @@ def chat(
                     f"[{_conversation_suffix(target.conversation_id)}]"
                 )
                 continue
-            _execute_message(client, conversation, user_message)
+            _execute_message(client, conversation, user_message, search_mode=search_mode)
     except (httpx.HTTPError, RuntimeError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -588,15 +604,25 @@ def _execute_message(
     conversation: ConversationInfo,
     content: str,
     required_tool: str | None = None,
+    search_mode: SearchMode = SearchMode.AUTO,
 ) -> None:
     conversation_id = conversation.conversation_id
-    if required_tool is None:
+    if required_tool is None and search_mode is SearchMode.AUTO:
         result = client.send_message(conversation_id, content)
+    elif required_tool is None:
+        result = client.send_message(conversation_id, content, search_mode=search_mode)
+    elif search_mode is SearchMode.AUTO:
+        result = client.send_message(
+            conversation_id,
+            content,
+            required_tool=required_tool,
+        )
     else:
         result = client.send_message(
             conversation_id,
             content,
             required_tool=required_tool,
+            search_mode=search_mode,
         )
     _complete_run(client, conversation, result)
 
@@ -652,6 +678,18 @@ def _parse_test_command(value: str) -> TestCommand | None:
     if not target or not prompt:
         return None
     return TestCommand(kind=kind, target=target, prompt=prompt)
+
+
+def _parse_search_mode(value: str) -> SearchMode | None:
+    """解析 `/search-mode auto|rag|web|hybrid`。"""
+
+    parts = value.strip().split()
+    if len(parts) != 2 or parts[0].casefold() != "/search-mode":
+        return None
+    try:
+        return SearchMode(parts[1].casefold())
+    except ValueError:
+        return None
 
 
 def _build_test_prompt(command: TestCommand) -> str:
