@@ -432,7 +432,7 @@ System Prompt 要求：
 
 ## 9. 第二阶段退出条件
 
-只有以下条件全部满足，才进入第三阶段 Agent Teams：
+只有以下条件全部满足，才进入第三阶段 Multi-Agent：
 
 - DOCX/Markdown/TXT 可以通过 CLI 完成可重复入库和更新。
 - Knowledge Assistant 可以调用 `document_search` 并生成可定位引用。

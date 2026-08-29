@@ -8,9 +8,9 @@
 
 1. Agent 基本功能：Agent Loop、Tool Use、权限、上下文、记忆、任务与错误恢复。
 2. RAG：知识入库、检索、上下文增强、来源引用和检索评测。
-3. Agent Teams（Multi-Agent）：任务委派、上下文隔离、并行执行、结果审核和失败恢复。
+3. Multi-Agent：任务委派、上下文隔离、并行执行、结果审核和失败恢复。
 
-`knowledge_assistant` 是本项目唯一的业务 Agent，也是通用 Harness 的集成测试项目。它负责检索资料、分析信息、制定计划并生成经过审核的报告。未来开发智能客服、旅游规划、学习陪伴、智能问诊、心理陪伴、Coding、监控等场景时，复制本模板并替换 `business/knowledge_assistant/` 的业务实现，继续复用 `harness/` 和 `services/`。每个项目只装配一个对外业务 Agent，Agent Teams 作为该 Agent 的内部协作机制。
+`knowledge_assistant` 是本项目唯一的业务 Agent，也是通用 Harness 的集成测试项目。它负责检索资料、分析信息、制定计划并生成经过审核的报告。未来开发智能客服、旅游规划、学习陪伴、智能问诊、心理陪伴、Coding、监控等场景时，复制本模板并替换 `business/knowledge_assistant/` 的业务实现，继续复用 `harness/` 和 `services/`。每个项目只装配一个对外业务 Agent，Multi-Agent 作为该 Agent 的内部协作机制。
 
 ---
 
@@ -48,7 +48,7 @@ src/                                    # 源代码目录
 │       │   ├── pipeline.py              # 通用检索流程
 │       │   └── citations.py             # 来源引用模型
 │       │
-│       └── agent_teams/                 # Agent Teams 通用能力
+│       └── agent_teams/                 # Multi-Agent 通用能力
 │           ├── contracts.py             # Agent、Task、Result 协议
 │           ├── team.py                  # Lead、Teammate 注册和任务委派
 │           ├── message_bus.py            # 消息总线
@@ -71,7 +71,7 @@ src/                                    # 源代码目录
 │       │   ├── file_reader.py          # 读取受限文件
 │       │   └── report_writer.py        # 生成和保存报告
 │       │
-│       ├── agent_teams/                 # 知识助手团队角色
+│       ├── agent_teams/                 # 知识助手 Multi-Agent 角色
 │       │   ├── lead.py                 # 主 Agent / Supervisor
 │       │   ├── researcher.py           # 资料检索
 │       │   ├── analyst.py              # 比较、计算和分析
@@ -150,7 +150,7 @@ Services    决定：上述能力由哪些具体技术实现
 | `tasks.py` | `task_system.py` | s12 Task System |
 | `background.py`、`jobs.py` | `background_tasks.py` | s13 Background Tasks |
 | `scheduler.py` | `cron_scheduler.py` | s14 Cron Scheduler |
-| `multi_agent/` | `agent_teams/` | s15 Agent Teams |
+| `multi_agent/` | `agent_teams/` | s15 Multi-Agent |
 | `supervisor.py` | `agent_teams/team.py` 中的 Lead | s15 中的 Lead Agent |
 | `protocols.py` | `team_protocols.py` | s16 Team Protocols |
 | `event_bus.py` | `message_bus.py` | s15 中的 MessageBus |
@@ -229,7 +229,7 @@ Lead Agent 汇总最终报告
 
 ## 4. 实现计划
 
-项目按四个正式阶段推进。RAG 和 Agent Teams 仍分别位于第二、第三阶段；此前列为
+项目按四个正式阶段推进。RAG 和 Multi-Agent 仍分别位于第二、第三阶段；此前列为
 “本期不做”的生产能力统一进入第四阶段，避免在单 Agent 主链路尚未稳定时提前引入
 分布式队列、后台 Worker 和复杂身份系统。
 
@@ -237,7 +237,7 @@ Lead Agent 汇总最终报告
 | --- | --- | --- |
 | 第一阶段 | 工程骨架和基本 Agent 功能 | 可独立运行的单 Agent MVP |
 | 第二阶段 | RAG | 能够基于通用文档知识库检索并生成带引用的回答 |
-| 第三阶段 | Agent Teams | Lead Agent 能够委派、并行执行并审核 Teammate 任务 |
+| 第三阶段 | Multi-Agent | Lead Agent 能够委派、并行执行并审核 Teammate 任务 |
 | 第四阶段 | 生产化与高级交互 | 多 Worker、持久任务、正式身份、实时事件和故障恢复 |
 
 综合 Agent Turn 不单独占用开发阶段，而是在第四阶段完成后作为全系统验收。
@@ -530,11 +530,11 @@ agent index knowledge-assistant ./src/business/knowledge_assistant/knowledge/doc
 
 ---
 
-## 4.3 第三阶段：Agent Teams
+## 4.3 第三阶段：Multi-Agent
 
 详细任务、验证方案和退出条件见[第三阶段实施计划](./phase-3-implementation-plan.md)。
 
-阶段状态：**计划中**。当前仅保留 Agent Teams 的目录和模块骨架，尚未接入 Agent Loop、Profile 和运行时。
+阶段状态：**计划中**。当前仅保留 Multi-Agent 的目录和模块骨架，尚未接入 Agent Loop、Profile 和运行时。
 
 第一版采用 Lead Agent + Subagents/Teammates 模式，不直接构建完全自治的对等 Agent 网络。
 
@@ -585,12 +585,12 @@ agent index knowledge-assistant ./src/business/knowledge_assistant/knowledge/doc
 - 多个无依赖任务的并行执行。
 - 最大委派深度、调用次数、耗时和 Token 预算。
 - Subagent/Teammate 超时、重试、取消和失败降级。
-- Agent Team 调用关系和成本的完整追踪。
+- Multi-Agent 调用关系和成本的完整追踪。
 
 业务和服务层负责：
 
 - `business/knowledge_assistant/agent_teams/` 定义 Lead、Researcher、Analyst 和 Reviewer 的业务 Prompt、Tools 与输出 Schema。
-- `knowledge_assistant/profile.py` 注册团队角色并启用 Agent Teams Capability。
+- `knowledge_assistant/profile.py` 注册角色并启用 Multi-Agent Capability。
 - 第三阶段只使用进程内 MessageBus；`services/message_bus.py` 的 Redis 持久化实现延后到第四阶段。
 
 ### 4.3.3 上下文隔离原则
@@ -684,7 +684,7 @@ Assistant 的生产化阶段。
 10. 系统在权限确认后保存报告及任务记录。
 11. 生产化部署启用时，后台任务根据需要生成后续跟踪任务。
 
-综合验收应同时覆盖流式输出、Permission、RAG、Agent Teams、持久化、Error Recovery、Background Tasks 和可观测性。
+综合验收应同时覆盖流式输出、Permission、RAG、Multi-Agent、持久化、Error Recovery、Background Tasks 和可观测性。
 
 ---
 
@@ -697,7 +697,7 @@ Assistant 的生产化阶段。
 | s03 Permission | `harness/permissions.py` + 业务 `permission_rules.py` | 基本功能 |
 | s04 Hooks | `harness/hooks.py` | 基本功能 |
 | s05 TodoWrite | `harness/capabilities/todo_write.py` | 基本功能 |
-| s06 Subagent | `harness/capabilities/subagent.py` | Agent Teams |
+| s06 Subagent | `harness/capabilities/subagent.py` | Multi-Agent |
 | s07 Skill Loading | `harness/capabilities/skill_loading.py` | 基本功能 |
 | s08 Context Compact | `harness/capabilities/context_compact.py` | 基本功能 |
 | s09 Memory | `harness/capabilities/memory.py` | 基本功能 |
@@ -706,8 +706,8 @@ Assistant 的生产化阶段。
 | s12 Task System | `harness/capabilities/task_system.py` | 基本功能 |
 | s13 Background Tasks | `harness/capabilities/background_tasks.py`、`services/background_tasks.py` | 生产化阶段 |
 | s14 Cron Scheduler | `services/cron_scheduler.py` | 生产化阶段 |
-| s15 Agent Teams | `harness/capabilities/agent_teams/team.py`、`harness/capabilities/agent_teams/message_bus.py` | Agent Teams |
-| s16 Team Protocols | `harness/capabilities/agent_teams/team_protocols.py` | Agent Teams |
+| s15 Multi-Agent | `harness/capabilities/agent_teams/team.py`、`harness/capabilities/agent_teams/message_bus.py` | Multi-Agent |
+| s16 Team Protocols | `harness/capabilities/agent_teams/team_protocols.py` | Multi-Agent |
 | s17 Autonomous Agents | `harness/capabilities/agent_teams/autonomous_agents.py`、Worker、Budget Limits | 生产化阶段 |
 | s18 Worktree Isolation | 未来 `business/coding/` | 当前不实现 |
 | s19 MCP Tools | `services/mcp_tools.py` | 基本功能增强 |
@@ -746,7 +746,7 @@ Assistant 的生产化阶段。
 | 本地并发 | asyncio + `TaskGroup` | 并行工具与子 Agent | 默认采用 |
 | 后台任务 | PostgreSQL 任务表或 Redis Streams；框架按需选择 | 长任务和异步 Agent | 生产化阶段按需启用 |
 | 定时任务 | APScheduler | 跟踪任务和周期调度 | 生产化阶段按需启用 |
-| Agent Teams 消息 | 进程内 MessageBus / Redis | 本地通信与生产持久通信 | 第三阶段采用 |
+| Multi-Agent 消息 | 进程内 MessageBus / Redis | 本地通信与生产持久通信 | 第三阶段采用 |
 | MCP | `langchain-mcp-adapters` | 接入 MCP Server | 基本功能增强 |
 | HTTP 客户端 | HTTPX | 外部接口调用 | 默认采用 |
 | 结构化日志 | structlog | 日志和上下文绑定 | 默认采用 |
@@ -767,7 +767,7 @@ Assistant 的生产化阶段。
 | 模型与安全 | Model Gateway、Pydantic、Permission Pipeline、Hooks | 统一模型重试/降级、工具校验、审批和审计 |
 | RAG 数据链路 | FastEmbed、`langchain-text-splitters`、PostgreSQL + pgvector | 完成文档入库、向量检索、权限过滤和 Citation |
 | 外部工具 | `langchain-mcp-adapters` | 统一接入 MCP；联网搜索需要额外配置 Web Search MCP Tool |
-| Agent Teams | LangGraph Subgraph、`asyncio.TaskGroup`、进程内 MessageBus | 第三阶段实现 Subagent、并行任务和审核；生产化再引入持久总线 |
+| Multi-Agent | LangGraph Subgraph、`asyncio.TaskGroup`、进程内 MessageBus | 第三阶段实现 Subagent、并行任务和审核；生产化再引入持久总线 |
 | 会话与产物 | SQLite Checkpoint/Conversation Index、本地文件系统 | 当前用于会话恢复、用户隔离和报告保存 |
 | 生产化存储与任务 | PostgreSQL、Redis、Worker、S3 兼容存储 | 第四阶段用于多 Worker、后台任务、索引更新和大文件产物 |
 | 可观测性与部署 | structlog、OpenTelemetry、Docker Compose | 当前结构化日志和本地部署；生产环境增加 Trace、Metrics 和告警 |
@@ -855,13 +855,13 @@ dev:
 | 第一阶段：基本功能 | M4 | System Prompt、TodoWrite、Skill Loading、Context Compact、Memory、Error Recovery、Checkpoint | 会话可恢复，长上下文可压缩，错误可降级处理 |
 | 第一阶段：基本功能 | M5 | Task System、MCP Tools、单 Agent 业务闭环 | 完成文件分析、报告保存和任务管理，不依赖 RAG |
 | 第二阶段：RAG | M6 | RAG 协议、入库服务、document_search、Indexer、引用评测 | 基于知识文档回答并提供真实来源 |
-| 第三阶段：Agent Teams | M7 | Subagent、`team.py`、Lead Agent、Researcher | Lead Agent 可以委派隔离的检索任务 |
-| 第三阶段：Agent Teams | M8 | 进程内 MessageBus、Team Protocols、Analyst、Reviewer | Teammates 并行通信、审核和有限重做 |
+| 第三阶段：Multi-Agent | M7 | Subagent、`team.py`、Lead Agent、Researcher | Lead Agent 可以委派隔离的检索任务 |
+| 第三阶段：Multi-Agent | M8 | 进程内 MessageBus、Team Protocols、Analyst、Reviewer | Teammates 并行通信、审核和有限重做 |
 | 第四阶段：生产化 | M9 | PostgreSQL、身份、SSE、Trace 和恢复 | Agent Server 可持久运行并安全隔离用户 |
 | 第四阶段：生产化 | M10 | 幂等、分布式队列、RAG 文档上传与自动更新、Index Worker/Reconciler、Background/Cron、生产 MessageBus、受约束的 Autonomous Agents | 长任务可跨 Worker 执行和恢复，文档变更可最终一致地进入可检索索引 |
 | 第四阶段：高级交互 | M11 | `/btw`、分支、重新生成、Steering、Rollback 和综合验收 | 完整知识工作流程稳定运行 |
 
-建议严格按照 M1 到 M11 的顺序推进：M1～M5 完成第一阶段单 Agent 与多用户 CLI；M6 完成 RAG；M7～M8 完成 Agent Teams；M9～M11 按实际部署需求完成生产化和高级交互。
+建议严格按照 M1 到 M11 的顺序推进：M1～M5 完成第一阶段单 Agent 与多用户 CLI；M6 完成 RAG；M7～M8 完成 Multi-Agent；M9～M11 按实际部署需求完成生产化和高级交互。
 
 ---
 
@@ -876,7 +876,7 @@ dev:
 - System Prompt、Context、Context Compact 和 Memory。
 - 第一阶段：Task System、Conversation 所有权和同一 Conversation 并发控制。
 - RAG Chunk、元数据过滤和引用生成。
-- Agent Teams 合约、Team Protocols 和任务预算。
+- Multi-Agent 合约、Team Protocols 和任务预算。
 - 第四阶段：Background Tasks、Cron 表达式、幂等和任务租约。
 
 单元测试使用 Fake Model、Fake Embeddings、Fake Retriever、内存 Store 和进程内 MessageBus，避免依赖网络服务。
@@ -895,7 +895,7 @@ dev:
 - CLI 完整资料研究和报告生成流程。
 - 第一阶段：多用户 CLI/API 隔离；第四阶段：API 流式输出。
 - RAG 答案与来源一致性。
-- Agent Teams 委派和审核闭环。
+- Multi-Agent 委派和审核闭环。
 - 第一阶段：MCP Tools 调用链；第四阶段：Background Tasks 与 Cron Scheduler 调用链。
 - 进程重启后的会话恢复。
 
@@ -906,7 +906,7 @@ dev:
 - 任务完成率。
 - RAG Recall@K 和引用正确率。
 - 无依据回答率。
-- Agent Teams 路由正确率。
+- Multi-Agent 路由正确率。
 - Permission 误放行率和不必要审批率。
 - Error Recovery 成功率。
 - 平均响应时间、Token 和模型成本。
@@ -948,10 +948,10 @@ src/business/<business_agent>/
 ├── schemas.py              # 有独立业务数据结构时增加
 ├── context.py              # 有业务上下文或 RAG 过滤条件时增加
 ├── permission_rules.py     # 有业务权限规则时增加
-├── agent_teams/            # 启用 Agent Teams 时增加
+├── agent_teams/            # 启用 Multi-Agent 时增加
 └── knowledge/              # 启用本地知识库或 RAG 时增加
 ```
 
-替换完成后，让 `entrypoints/bootstrap.py` 直接导入该项目唯一的 `AgentProfile` 并创建统一 Agent Loop；业务代码不得自行复制 Agent Loop、Permission Pipeline、Task System 或 RAG Pipeline。Agent Teams 放在该业务目录内部，由 Graph 编排，不作为多个对外业务 Agent 注册。
+替换完成后，让 `entrypoints/bootstrap.py` 直接导入该项目唯一的 `AgentProfile` 并创建统一 Agent Loop；业务代码不得自行复制 Agent Loop、Permission Pipeline、Task System 或 RAG Pipeline。Multi-Agent 放在该业务目录内部，由 Graph 编排，不作为多个对外业务 Agent 注册。
 
 只有出现真正可跨业务复用的新能力时，才修改 `harness/capabilities/`；只有需要新的模型、数据库、消息总线或共享外部系统实现时，才修改 `services/`。业务需求本身不应该导致 Agent Loop 频繁变化。

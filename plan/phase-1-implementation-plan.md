@@ -7,7 +7,7 @@
 
 ## 1. 阶段目标
 
-第一阶段交付一个不依赖 RAG 和 Agent Teams 的 Knowledge Assistant 单 Agent MVP，验证通用 Harness 可以稳定完成：
+第一阶段交付一个不依赖 RAG 和 Multi-Agent 的 Knowledge Assistant 单 Agent MVP，验证通用 Harness 可以稳定完成：
 
 ```text
 用户输入
@@ -36,7 +36,7 @@ System Prompt + Context
 第一阶段明确不实现：
 
 - RAG、Embedding、pgvector 和 `document_search` 的实际检索能力。
-- Subagent、Agent Teams、MessageBus 和 Team Protocols。
+- Subagent、Multi-Agent、MessageBus 和 Team Protocols。
 - Autonomous Agents。
 - 正式身份认证、SSE/WebSocket、生产 Worker、分布式队列和前端界面。
 - Background Tasks、Cron Scheduler 和多 Worker 部署。
@@ -49,7 +49,7 @@ System Prompt + Context
 | 优先级 | 进入阶段 | 功能 | 排序原因 |
 | --- | --- | --- | --- |
 | 1 | 第二阶段 M6 | RAG、Embedding、pgvector、Indexer、引用评测 | 直接增强 Knowledge Assistant 的核心知识能力，且不依赖 Multi-Agent |
-| 2 | 第三阶段 M7～M8 | Subagent、Agent Teams、进程内 MessageBus、Team Protocols、Reviewer | 依赖稳定的单 Agent、Conversation 和 RAG 契约 |
+| 2 | 第三阶段 M7～M8 | Subagent、Multi-Agent、进程内 MessageBus、Team Protocols、Reviewer | 依赖稳定的单 Agent、Conversation 和 RAG 契约 |
 | 3 | 第四阶段 M9 | PostgreSQL Checkpoint/Store、正式身份、租户隔离、SSE、Trace、远程取消 | 是从本地可信多用户进入可部署服务的基础 |
 | 4 | 第四阶段 M10 | `message_id`、副作用幂等、多 Worker、分布式队列、Agent Worker、Background Tasks、Cron、生产 MessageBus、受约束的 Autonomous Agents | 只有长任务和水平扩展出现后才有收益，并依赖持久化、租约与幂等 |
 | 5 | 第四阶段 M11 | `/btw`、分支、重新生成、Steering、Rollback、跨设备恢复、前端 | 属于体验和高级交互，不阻塞核心业务闭环 |
@@ -272,7 +272,7 @@ uv run agent chat
 - Profile、Bootstrap、Agent Loop 职责分离。
 - FakeModel 自动化测试全部通过。
 - 真实模型冒烟测试可以通过配置启用。
-- 尚未出现 Tool Use、RAG 或 Agent Teams 代码路径。
+- 尚未出现 Tool Use、RAG 或 Multi-Agent 代码路径。
 
 ---
 
@@ -940,7 +940,7 @@ src/
 
 ### 8.1 目标
 
-完成 Task System 和 MCP Tools，并用 Knowledge Assistant 验证不依赖 RAG、Agent Teams、
+完成 Task System 和 MCP Tools，并用 Knowledge Assistant 验证不依赖 RAG、Multi-Agent、
 Background Tasks 或 Cron Scheduler 的完整单 Agent 业务流程。
 
 ### 8.2 涉及文件
@@ -1045,7 +1045,7 @@ report_writer 请求写入审批
 complete_task 保存任务结果
 ```
 
-这个场景不能调用 RAG、Subagent 或 Agent Teams。
+这个场景不能调用 RAG、Subagent 或 Multi-Agent。
 
 实现说明：
 
@@ -1067,7 +1067,7 @@ complete_task 保存任务结果
 - 确定性 FakeModel E2E 已验证 TodoWrite、Task 创建/认领、双文件读取、Calculator、
   ReportWriter 覆盖审批、Checkpoint 恢复、Task 完成、后续 Task 创建和 Todo 完成；
   报告真实写入用户 Artifact 目录，全部 ToolUse/ToolResult 正确配对。
-- Knowledge Assistant Profile 未装配 `document_search`、Subagent 或 Agent Teams，闭环
+- Knowledge Assistant Profile 未装配 `document_search`、Subagent 或 Multi-Agent，闭环
   不依赖 RAG、Redis、后台 Worker、外部 MCP Server 或真实模型。
 - CLI 手工验收已完成文件分析、TodoWrite 规划、Task 创建/认领、双文件读取、必要计算、
   ReportWriter 权限分支、Artifact 保存、Task 持久化与来源核验，以及 Tool Hook Server 日志复验。
@@ -1112,7 +1112,7 @@ TodoWrite
 - Task 状态为完成。
 - 对话中存在正确的 ToolUse/ToolResult 配对。
 - 审批记录、日志和 Trace 可以关联到同一个 `thread_id`。
-- 没有调用 `document_search`、Subagent 或 Agent Teams。
+- 没有调用 `document_search`、Subagent 或 Multi-Agent。
 
 ### 8.5 手工验证
 
@@ -1131,7 +1131,7 @@ TodoWrite
 ### 8.6 M5 验收标准
 
 - Task System 和 MCP Tools 均有独立自动化测试。
-- Knowledge Assistant 完成无 RAG、无 Agent Teams 的端到端业务闭环。
+- Knowledge Assistant 完成无 RAG、无 Multi-Agent 的端到端业务闭环。
 - 所有副作用操作都经过 Permission，并具有明确的结果记录。
 - CLI 中断后可以通过 Checkpoint 恢复。
 - 默认测试不需要真实模型、Redis、后台 Worker 或外部 MCP Server。
@@ -1159,7 +1159,7 @@ TodoWrite
 | Checkpoint | `services/checkpoint.py` | 重启恢复测试 | 审批时退出后恢复 | 正常恢复不重复已完成 Graph 节点 |
 | Task System | `task_system.py` | 依赖和并发认领测试 | 查看任务列表 | 状态持久且转换合法 |
 | MCP Tools | `services/mcp_tools.py` | Mock Server 测试 | 连接测试 Server | 工具统一进入 Permission Pipeline |
-| Knowledge Assistant | `business/knowledge_assistant/` | CLI E2E | 文件分析并生成报告 | 无 RAG/Agent Teams 完成闭环 |
+| Knowledge Assistant | `business/knowledge_assistant/` | CLI E2E | 文件分析并生成报告 | 无 RAG/Multi-Agent 完成闭环 |
 
 ---
 

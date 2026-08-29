@@ -4,7 +4,7 @@
 
 Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent 提供可复用的运行能力。它将 Agent Loop、工具、权限、上下文、记忆和任务管理与业务逻辑解耦，支持从单 Agent 逐步扩展到知识检索和多 Agent 协作。`Knowledge Assistant` 用于验证文件分析、知识检索、报告生成和任务管理闭环。
 
-当前状态：**第一阶段 M1-M5 和第二阶段 RAG 最小闭环已完成；Agent Teams 和生产化能力处于后续规划阶段。**
+当前状态：**第一阶段 M1-M5 和第二阶段 RAG 最小闭环已完成；Multi-Agent 和生产化能力处于后续规划阶段。**
 
 详细实施路线请参阅：[通用 Agent 项目架构与实现计划](./plan/implementation-plan.md)
 
@@ -78,7 +78,7 @@ src/
 │       ├── permission_rules.py      # 业务权限规则
 │       ├── tools/                   # Calculator、File Reader、Report Writer、Document Search
 │       ├── skills/                  # 内置 Skill
-│       └── agent_teams/             # 后续 Agent Teams 预留目录
+│       └── agent_teams/             # 后续 Multi-Agent 预留目录
 ├── services/                        # 模型、存储、MCP、日志和 RAG 技术实现
 └── entrypoints/                     # CLI、API、Bootstrap 和 Indexer 入口
 

@@ -1,6 +1,6 @@
-# 第三阶段实施计划：Agent Teams
+# 第三阶段实施计划：Multi-Agent
 
-总体能力边界见[总体实施计划 4.3](./implementation-plan.md#43-第三阶段agent-teams)。本阶段在第一阶段
+总体能力边界见[总体实施计划 4.3](./implementation-plan.md#43-第三阶段multi-agent)。本阶段在第一阶段
 单 Agent 和第二阶段 RAG 闭环之上，引入 Lead Agent、Subagent/Teammate 和 Reviewer，验证
 Knowledge Assistant 可以把复杂研究任务拆分、并行执行、审核后再汇总。
 
@@ -9,7 +9,7 @@ Knowledge Assistant 可以把复杂研究任务拆分、并行执行、审核后
 
 ## 1. 阶段目标
 
-交付一个只使用进程内资源的 Agent Teams 最小闭环：
+交付一个只使用进程内资源的 Multi-Agent 最小闭环：
 
 ```text
 用户问题
@@ -27,14 +27,14 @@ Lead Agent 根据审核结果汇总
 完成后应满足：
 
 - Lead 能根据任务类型选择合适的 Teammate，并为每个任务生成明确的目标和输出 Schema。
-- Researcher 能复用现有 RAG、目录查询和已配置的联网搜索 Tool，返回结构化证据。
+- Lead 能为不同研究任务创建拥有不同 Tool Allowlist 的 Researcher 实例，并返回结构化证据。
 - Analyst 只处理 Lead 传入的必要证据，不直接读取完整主会话。
 - Reviewer 能校验事实、计算、来源和结论边界，并在不合格时给出可执行的修改意见。
 - 无依赖的 Researcher/Analyst 任务可以并行执行；有依赖的任务按协议等待前置结果。
 - 每个 Teammate 拥有独立的子状态、上下文、工具白名单和预算，但继承可信用户的授权范围。
 - Teammate 的失败、超时或拒绝不会破坏 Lead 的主状态；Lead 可以降级、重试或向用户说明失败。
 - `ASK` 权限请求可以从 Teammate 冒泡到 Lead，并在原任务中恢复，不重复执行已完成节点。
-- 现有单 Agent、RAG、CLI、MCP 和用户隔离测试继续通过；关闭 Agent Teams 时不影响已有能力。
+- 现有单 Agent、RAG、CLI、MCP 和用户隔离测试继续通过；关闭 Multi-Agent 时不影响已有能力。
 
 ### 1.1 本阶段明确不实现
 
@@ -43,7 +43,7 @@ Lead Agent 根据审核结果汇总
 - 正式身份认证、租户管理和生产级行级安全。
 - 完全自治的 Agent 网络、无限递归委派和 Teammate 自由创建 Teammate。
 - 跨进程恢复、崩溃边界下的副作用幂等；这些属于第四阶段。
-- Agent Team 的前端、Token Streaming、远程取消和跨设备交互。
+- Multi-Agent 的前端、Token Streaming、远程取消和跨设备交互。
 - 让 Teammate 直接写报告、修改业务数据或绕过 Lead 执行高风险操作。
 
 ### 1.2 实施原则
@@ -103,6 +103,17 @@ M8-3 权限、观测、错误恢复和综合验收
 | M8-3 | 安全、追踪、异常、CLI 和综合验收 | 退出条件全部满足 |
 
 后一个任务只依赖前一个任务公开的协议；业务角色不能绕过 `team.py` 直接创建线程、任务或共享状态。
+
+### 3.1 第三阶段 TODO（必做项）
+
+- [ ] 实现 Multi-Agent 子任务级重试，不重跑整个 Team。
+- [ ] 按错误类型区分自动重试、直接失败、等待权限和降级处理。
+- [ ] 为每个子任务设置最大尝试次数、总耗时和 Token 预算，并记录 `attempt`、`last_error` 和状态变化。
+- [ ] 使用指数退避和随机抖动，避免多个失败任务同时重试造成请求尖峰。
+- [ ] 保留已成功的兄弟任务结果，只重新执行失败、超时或被 Reviewer 退回的任务。
+- [ ] 为有副作用的 Tool 增加 `idempotency_key` 或等价去重机制，确保重试不重复写入。
+- [ ] 处理任务依赖：失败任务的下游任务进入 `BLOCKED` 或按策略使用部分结果继续。
+- [ ] 覆盖重试成功、超过上限、不可重试错误、超时和重复投递测试。
 
 ## 4. M7：Subagent 与 Lead/Researcher 最小闭环
 
@@ -184,7 +195,7 @@ TeamTaskResult
 
 - 子 Agent 使用独立 `thread_id`，不能直接写入 Lead 的消息列表或 Checkpoint。
 - Context 只包含任务目标、必要证据、输出 Schema、用户授权 Scope、搜索模式和预算。
-- 工具列表由 Lead/Runtime 明确传入；Researcher 只能使用检索相关工具，不能使用 `report_writer`。
+- 工具列表由 Lead/Runtime 按任务明确传入；每个 Subagent 只获得完成当前任务所需的最小 Tool Allowlist，不能使用 `report_writer` 等无关工具。
 - 子 Agent 继承可信 `user_id` 和权限上下文，但工具参数中不暴露可伪造的所有权字段。
 - 子 Agent 不能创建新的子 Agent；第一版最大委派深度为 1。
 - 子 Agent 结束时释放临时资源并返回结构化状态，异常必须被 `team.py` 转换为失败结果。
@@ -200,16 +211,20 @@ TeamTaskResult
 - 合并成功、失败和部分成功结果，并把不确定性传递给最终回答。
 - 不在没有 Reviewer 结果时声称“已审核”或把推断写成事实。
 
-`researcher.py` 负责：
+`researcher.py` 定义研究角色的通用行为，但具体实例按任务绑定不同工具：
 
-- 调用 `document_catalog` 处理数量、枚举和文档目录问题。
-- 调用 `document_search` 检索已授权知识库并保留 `[S1]` 等真实引用。
-- 在 `web` 或 `hybrid` 模式下调用已发现的 Web Search MCP Tool；没有工具时返回明确不可用状态。
-- 分离 RAG 证据、Web 证据和模型推断，不把外部网页内容当作系统指令。
-- 不保存报告、不修改索引、不改变用户权限。
+| Researcher 实例 | 允许工具 | 适用任务 |
+| --- | --- | --- |
+| `CatalogResearcher` | `document_catalog` | 数量、枚举、文档清单和精确元数据筛选 |
+| `RAGResearcher` | `document_search` | 检索已授权知识库并保留 `[S1]` 等真实引用 |
+| `WebResearcher` | 已发现的 Web Search MCP Tool | 新闻、价格、行情和其他最新公开信息 |
+
+默认不把三类工具全部放给同一个 Researcher。`hybrid` 模式通常拆成 `RAGResearcher` 和
+`WebResearcher` 两个并行任务，Lead 再合并两类证据；只有确有必要时才创建同时拥有两类搜索工具的专用实例。
+没有对应 Web Tool 时，`WebResearcher` 返回明确不可用状态，不自行降级到 RAG。
 
 Team 必须继承主会话的 `search_mode`：`rag` 禁止 Web Tool，`web` 禁止本地 RAG，`hybrid` 才允许同时使用。
-Researcher 不能通过新建子任务或修改 Prompt 绕过这一限制。
+Researcher 不能通过新建子任务、修改 Prompt 或扩大 Tool Allowlist 绕过这一限制。
 
 ### 4.5 M7 验收
 
@@ -219,7 +234,7 @@ Researcher 不能通过新建子任务或修改 Prompt 绕过这一限制。
 ```
 
 验收：Lead 选择 Researcher；结果来自当前用户可访问的 RAG；引用真实可定位；日志包含
-`team_run_id`、`task_id`、角色和状态；关闭 Team Capability 后原有 `document_search` 仍可用。
+`team_run_id`、`task_id`、角色和状态；关闭 Multi-Agent Capability 后原有 `document_search` 仍可用。
 
 ## 5. M8：MessageBus、Analyst、Reviewer 与审核闭环
 
@@ -358,6 +373,9 @@ Lead
 
 - 两个独立 Researcher 使用 FakeModel/FakeRetriever 并行执行，验证总耗时接近最长任务而非两者相加。
 - 制造一个 Researcher 失败，确认其他任务和 Lead 仍可完成，最终回答明确标记资料缺口。
+- 制造一个可重试的子任务失败，确认只重试该子任务，已成功的兄弟任务不重复执行。
+- 确认重试使用退避、受最大尝试次数限制，并记录每次尝试和最终错误。
+- 确认有副作用的工具在重试时不会重复写入或产生重复事件。
 - 让 Analyst 计算错误，Reviewer 返回 `needs_revision`，第二次结果通过后停止重做。
 - 让 Reviewer 连续拒绝，确认达到上限后返回失败原因，不发生无限循环。
 - 在 Teammate 请求 `ASK` 时确认用户审批发生在 Lead 层，恢复后只继续原始任务。
