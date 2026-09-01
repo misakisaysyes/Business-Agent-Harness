@@ -56,8 +56,6 @@ M7-M8 默认只使用进程内资源，不依赖 Redis、后台 Worker 或公网
 flowchart LR
     cli["CLI Client"] --> api["FastAPI Agent Server"]
     api --> conversation["Conversation Service"]
-    indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
-    ingestion --> vectorDb
 
     subgraph harness["Harness 能力"]
         conversation --> runtime["User Runtime Registry"]
@@ -78,15 +76,20 @@ flowchart LR
     subgraph business["Business 能力：Knowledge Assistant"]
         agentLoop --> lead["Lead Agent"]
         lead --> businessTools["Business Tools"]
-        businessTools --> documentSearch["document_search"]
-        documentSearch --> ragPipeline["RAG Pipeline"]
-        ragPipeline --> vectorDb[("PostgreSQL + pgvector")]
+        businessTools --> documentSearch["Document Search Tools"]
         teamCoordinator --> researcher["Researcher"]
         teamCoordinator --> analyst["Analyst"]
         teamCoordinator --> reviewer["Reviewer"]
     end
 
     permission --> businessTools
+    documentSearch --> ragPipeline
+
+    subgraph shared["Shared Services：RAG"]
+        ragPipeline["RAG Pipeline"] --> vectorDb[("PostgreSQL + pgvector")]
+        indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
+        ingestion --> vectorDb
+    end
 ```
 
 ### 技术选型
