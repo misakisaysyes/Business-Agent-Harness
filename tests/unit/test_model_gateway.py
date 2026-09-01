@@ -37,6 +37,26 @@ def request() -> ModelRequest:
     )
 
 
+def test_request_model_is_selected_before_configured_fallback(tmp_path: Path) -> None:
+    """请求指定 fallback 模型时，Gateway 应把它作为本次调用首选路由。"""
+
+    primary = FixedModel("primary", "primary response")
+    fallback = FixedModel("fallback", "fallback response")
+    gateway = ModelGateway(
+        ModelRoute(primary, "primary-model", "primary-scope"),
+        fallbacks=(ModelRoute(fallback, "fallback-model", "fallback-scope"),),
+        settings=ModelGatewaySettings(lock_directory=tmp_path),
+    )
+
+    result = gateway.invoke(
+        request().model_copy(update={"model": "fallback/fallback-model"})
+    )
+
+    assert result.content == "fallback response"
+    assert primary.sync_calls == 0
+    assert fallback.sync_calls == 1
+
+
 class TimeoutThenSuccessModel:
     """先超时指定次数，随后成功的模型替身。
 

@@ -22,6 +22,7 @@ class ModelRequest(BaseModel):
     system_prompt: str = Field(min_length=1)
     messages: tuple[Message, ...] = Field(min_length=1)
     tools: tuple[ToolDefinition, ...] = ()
+    model: str | None = Field(default=None, min_length=1, max_length=256)
     max_output_tokens: int | None = Field(default=None, ge=1)
     required_tool: str | None = Field(
         default=None,

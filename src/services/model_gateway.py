@@ -249,7 +249,7 @@ class ModelGateway:
         fallback_reason: str | None = None
         last_error: Exception | None = None
 
-        for route_index, route in enumerate(self.routes):
+        for route_index, route in enumerate(self._routes_for_request(request)):
             if request.required_tool is not None and not route.supports_required_tool_choice:
                 fallback_reason = (
                     f"{route.label} does not support required tool choice"
@@ -279,7 +279,7 @@ class ModelGateway:
         fallback_reason: str | None = None
         last_error: Exception | None = None
 
-        for route_index, route in enumerate(self.routes):
+        for route_index, route in enumerate(self._routes_for_request(request)):
             if request.required_tool is not None and not route.supports_required_tool_choice:
                 fallback_reason = (
                     f"{route.label} does not support required tool choice"
@@ -299,6 +299,25 @@ class ModelGateway:
                 fallback_reason = self._retry_exhaustion_reason(route, error.error)
 
         raise self._unavailable_error(fallback_reason, last_error)
+
+    def _routes_for_request(self, request: ModelRequest) -> tuple[ModelRoute, ...]:
+        """按请求级模型选择重排路由；未指定时保持配置顺序。"""
+
+        if request.model is None:
+            return self.routes
+        selected = next(
+            (
+                route
+                for route in self.routes
+                if request.model in {route.label, route.model_id}
+            ),
+            None,
+        )
+        if selected is None:
+            raise ModelGatewayRequestRejectedError(
+                f"requested model is not configured: {request.model}"
+            )
+        return (selected, *(route for route in self.routes if route is not selected))
 
     def _invoke_route(
         self,

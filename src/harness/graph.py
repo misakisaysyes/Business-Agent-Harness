@@ -134,8 +134,15 @@ def _create_model_request(
     """
 
     required_tool: str | None = None
+    selected_model: str | None = None
+    metadata = state.get("metadata", {})
+    configured_model = metadata.get("model")
+    if configured_model is not None:
+        if not isinstance(configured_model, str):
+            raise ValueError("model metadata must be a string")
+        selected_model = configured_model
     if state.get("iteration_count", 0) == 0:
-        configured_tool = state.get("metadata", {}).get("required_tool")
+        configured_tool = metadata.get("required_tool")
         if configured_tool is not None:
             if not isinstance(configured_tool, str):
                 raise ValueError("required_tool metadata must be a string")
@@ -145,6 +152,7 @@ def _create_model_request(
         system_prompt=system_prompt,
         messages=tuple(state["messages"]),
         tools=tool_definitions,
+        model=selected_model,
         max_output_tokens=max_output_tokens,
         required_tool=required_tool,
     )

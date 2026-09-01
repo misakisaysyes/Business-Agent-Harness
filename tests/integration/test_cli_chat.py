@@ -36,6 +36,7 @@ class FakeAgentServerClient:
     closed = False
     sent_messages: list[tuple[str, str, str | None]] = []
     search_modes: list[SearchMode] = []
+    selected_models: list[str | None] = []
 
     def __init__(self, server_url: str, user_id: str) -> None:
         type(self).created_with = (server_url, user_id)
@@ -56,9 +57,11 @@ class FakeAgentServerClient:
         content: str,
         required_tool: str | None = None,
         search_mode: SearchMode = SearchMode.AUTO,
+        model: str | None = None,
     ) -> dict[str, Any]:
         type(self).sent_messages.append((conversation_id, content, required_tool))
         type(self).search_modes.append(search_mode)
+        type(self).selected_models.append(model)
         return {
             "conversation_id": conversation_id,
             "run_id": "run-001",
@@ -101,6 +104,12 @@ class FakeAgentServerClient:
                 "total_tokens": 12,
             },
         }
+
+    def get_models(self) -> tuple[cli_module.ModelSummary, ...]:
+        return (
+            cli_module.ModelSummary("moonshot/kimi-k3", True),
+            cli_module.ModelSummary("deepseek/deepseek-v4-flash", False),
+        )
 
     def list_skills(self) -> tuple[SkillSummary, ...]:
         return (
@@ -520,6 +529,31 @@ def test_cli_shows_current_user_token_usage(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "Token usage: input=10, output=2, total=12" in result.stdout
+
+
+def test_cli_lists_and_switches_model(monkeypatch) -> None:
+    """`/model` 应展示模型并把选择传给后续请求。"""
+
+    FakeAgentServerClient.sent_messages = []
+    FakeAgentServerClient.selected_models = []
+    monkeypatch.setattr(cli_module, "AgentServerClient", FakeAgentServerClient)
+
+    result = CliRunner().invoke(
+        app,
+        ["chat", "--user", "alice"],
+        input=(
+            "/model\n"
+            "/model deepseek/deepseek-v4-flash\n"
+            "测试切换后的模型\n"
+            "/quit\n"
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert "Available models:" in result.stdout
+    assert "Model: deepseek/deepseek-v4-flash" in result.stdout
+    assert FakeAgentServerClient.sent_messages[-1][1] == "测试切换后的模型"
+    assert FakeAgentServerClient.selected_models == ["deepseek/deepseek-v4-flash"]
 
 
 def test_cli_lists_skills_and_mcp_tools(monkeypatch) -> None:

@@ -74,6 +74,60 @@ class DocumentCatalogPermissionRule:
         )
 
 
+class DelegateResearchPermissionRule:
+    """允许只读的 Researcher 委派；子 Agent 的工具仍由 Runtime 单独隔离。"""
+
+    name = "allow_delegate_research"
+
+    async def evaluate(
+        self,
+        tool_use: ToolUse,
+        state: AgentState,
+    ) -> PermissionResult | PermissionDecision:
+        if tool_use.name != "delegate_research":
+            return PermissionDecision.PASSTHROUGH
+        return PermissionResult(
+            decision=PermissionDecision.ALLOW,
+            reason="research delegation is read-only and bounded by the runtime policy",
+        )
+
+
+class DelegateAnalysisPermissionRule:
+    """允许把已收集证据交给受限 Analyst。"""
+
+    name = "allow_delegate_analysis"
+
+    async def evaluate(
+        self,
+        tool_use: ToolUse,
+        state: AgentState,
+    ) -> PermissionResult | PermissionDecision:
+        if tool_use.name != "delegate_analysis":
+            return PermissionDecision.PASSTHROUGH
+        return PermissionResult(
+            decision=PermissionDecision.ALLOW,
+            reason="analysis delegation is bounded and receives only supplied evidence",
+        )
+
+
+class RequestReviewPermissionRule:
+    """允许将候选结果交给只读 Reviewer。"""
+
+    name = "allow_request_review"
+
+    async def evaluate(
+        self,
+        tool_use: ToolUse,
+        state: AgentState,
+    ) -> PermissionResult | PermissionDecision:
+        if tool_use.name != "request_review":
+            return PermissionDecision.PASSTHROUGH
+        return PermissionResult(
+            decision=PermissionDecision.ALLOW,
+            reason="review delegation is read-only and bounded by the runtime policy",
+        )
+
+
 class SearchModePermissionRule:
     """阻止强制检索模式调用相反来源的搜索 Tool。"""
 
@@ -212,6 +266,7 @@ class ExternalPublishPermissionRule:
 
 __all__ = [
     "CalculatorPermissionRule",
+    "DelegateResearchPermissionRule",
     "DocumentCatalogPermissionRule",
     "DocumentSearchPermissionRule",
     "ExternalPublishPermissionRule",

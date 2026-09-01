@@ -4,7 +4,7 @@
 
 Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent 提供可复用的运行能力。它将 Agent Loop、工具、权限、上下文、记忆和任务管理与业务逻辑解耦，支持从单 Agent 逐步扩展到知识检索和多 Agent 协作。`Knowledge Assistant` 用于验证文件分析、知识检索、报告生成和任务管理闭环。
 
-当前状态：**第一阶段 M1-M5 和第二阶段 RAG 最小闭环已完成；Multi-Agent 和生产化能力处于后续规划阶段。**
+当前状态：**第一阶段 M1-M5、第二阶段 RAG 最小闭环和第三阶段 Multi-Agent M7-M8 核心能力已完成；生产化能力仍处于后续规划阶段。**
 
 详细实施路线请参阅：[通用 Agent 项目架构与实现计划](./plan/implementation-plan.md)
 
@@ -30,6 +30,24 @@ Business Agent Harness 基于 Python、LangGraph 和 LangChain，为业务 Agent
 - **真实来源引用**：检索结果经过排序、去重、阈值和上下文预算控制，并生成可定位到来源、章节和 Chunk 的 `[S1]` 引用。
 - **可复用技术分层**：业务 Tool 只调用通用 RAG Pipeline，Embedding 与 PostgreSQL/pgvector 适配保留在 `services/rag/`，并支持关闭 RAG 后继续运行第一阶段单 Agent 能力。
 
+## 第三阶段项目亮点：M7-M8 Multi-Agent
+
+第三阶段在单 Agent 和 RAG 闭环之上完成了进程内 Multi-Agent 协作闭环，将通用的 Multi-Agent Harness 能力与 `Knowledge Assistant` 的 Business 能力分层，并通过业务场景完成任务拆分、并行执行、证据分析、结果审核和有限修订的集成验证。
+
+- **Harness 能力——子任务契约与隔离运行时**：为每个子任务维护独立的 `task_id`、`team_run_id`、子线程、上下文、工具白名单、最大深度和执行预算，主会话状态不会自动透传。
+- **Harness 能力——进程内 Team 通信协议**：MessageBus 提供 `send`、`publish`、`subscribe`、`close` 和 `drain`；Team Protocols 统一定义任务请求、接受、结果、失败、重试、审核、修订和 ACK 消息，并支持消息去重与可控关闭。
+- **Harness 能力——并行与任务级重试**：无依赖任务通过 `delegate_many` 并行执行；失败时只重试当前子任务，成功的兄弟任务不会重跑，并使用最大尝试次数、指数退避和随机抖动。
+- **Harness 能力——安全边界与失败隔离**：默认最大委派深度为一层，子 Agent 不能继续创建 Subagent；失败、超时、拒绝和联网不可用会转换为结构化结果，不会拖垮 Lead。
+- **Harness 能力——可观测性与权限执行**：日志保留 `team_run_id`、角色、父任务、尝试次数、最后错误和工具白名单；子任务继续复用统一 Permission Pipeline。
+- **Business 能力——Lead 任务拆分**：`Knowledge Assistant` 的 Lead 通过 `delegate_research`、`delegate_analysis` 和 `request_review` 组织 Researcher、Analyst 与 Reviewer，负责业务任务拆解和最终汇总。
+- **Business 能力——Researcher 专项检索**：按业务场景划分 `catalog_researcher`、`rag_researcher` 和 `web_researcher`，分别面向文档目录、本地知识和公开互联网资料。
+- **Business 能力——检索模式与证据分流**：遵循 `rag`、`web` 和 `hybrid` 策略；Hybrid 拆分为独立的本地 RAG 与 Web 任务，私有证据不会传给 Web Researcher。
+- **Business 能力——Analyst 证据分析**：Analyst 只处理 Lead 传入的必要证据，支持比较、归类和受限计算，输出 findings、calculations、conclusions、citations 和 uncertainties。
+- **Business 能力——Reviewer 独立审核**：Reviewer 检查事实支持、Citation、计算、证据冲突、推断边界和权限约束，输出 `approved`、`needs_revision` 或 `rejected`。
+- **Business 能力——有限审核闭环**：Reviewer 退回结果后，Lead 可重新执行分析；运行时最多允许初审加两次修订，超过上限返回结构化失败原因。
+
+M7-M8 默认只使用进程内资源，不依赖 Redis、后台 Worker 或公网；联网 Researcher 是否可用取决于运行时是否配置了 Web Search MCP Tool。
+
 ## 系统架构
 
 ### 总体架构
@@ -48,6 +66,11 @@ flowchart LR
     tools --> documentSearch["document_search"]
     documentSearch --> ragPipeline["RAG Pipeline"]
     ragPipeline --> vectorDb[("PostgreSQL + pgvector")]
+    agentLoop --> teamCoordinator["TeamCoordinator / Lead"]
+    teamCoordinator --> messageBus["In-memory MessageBus"]
+    teamCoordinator --> researcher["Researcher"]
+    teamCoordinator --> analyst["Analyst"]
+    teamCoordinator --> reviewer["Reviewer"]
     indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
     ingestion --> vectorDb
     agentLoop --> modelGateway["Model Gateway"]
@@ -71,14 +94,19 @@ src/
 │   ├── permissions.py               # Permission Pipeline
 │   ├── tool_use.py                  # Tool 注册和执行
 │   ├── conversation.py              # Conversation 和 Run 生命周期
-│   └── capabilities/                # Todo、Skill、Memory、Task、RAG 等
+│   └── capabilities/                # Todo、Skill、Memory、Task、RAG、Agent Teams 等
+│       └── agent_teams/             # MessageBus、Team Protocols、调度和隔离
 ├── business/
 │   └── knowledge_assistant/         # 当前业务 Agent
 │       ├── profile.py               # 业务能力装配
 │       ├── permission_rules.py      # 业务权限规则
 │       ├── tools/                   # Calculator、File Reader、Report Writer、Document Search
 │       ├── skills/                  # 内置 Skill
-│       └── agent_teams/             # 后续 Multi-Agent 预留目录
+│       └── agent_teams/             # Lead、Researcher、Analyst、Reviewer
+│           ├── lead.py              # 委派工具和审核入口
+│           ├── researcher.py        # Catalog/RAG/Web Researcher 定义
+│           ├── analyst.py           # 分析输入输出契约
+│           └── reviewer.py          # 审核输入输出契约
 ├── services/                        # 模型、存储、MCP、日志和 RAG 技术实现
 └── entrypoints/                     # CLI、API、Bootstrap 和 Indexer 入口
 
@@ -165,11 +193,22 @@ CLI 内置命令：
 /delete <ID>                 删除 Conversation
 /cancel <ID>                 取消运行中的 Run
 /usage                       查看 Token 用量
+/model [模型名]              查看或切换当前 CLI 会话的主模型
 /search-mode auto|rag|web|hybrid 设置当前会话的检索模式
 /skills                      查看可用 Skill
 /mcp                         查看 MCP Server 和工具
 /test tool|skill|mcp ...     强制测试指定能力
 /exit                        退出
+```
+
+#### `/model` 模型切换说明
+
+`/model` 查看服务端当前配置的主模型和 fallback 模型；`/model <模型名>` 将该模型设为当前
+CLI 会话后续消息的首选模型。模型必须已在服务端配置，切换不会影响其他用户或服务端全局主模型。
+
+```text
+/model
+/model deepseek/deepseek-v4-flash
 ```
 
 #### `/search-mode` 检索模式说明

@@ -94,6 +94,14 @@ class MCPStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelSummary:
+    """CLI 展示的模型配置。"""
+
+    name: str
+    primary: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TestCommand:
     """解析后的 `/test` 类型、目标和测试请求。"""
 
@@ -169,10 +177,13 @@ class AgentServerClient:
         content: str,
         required_tool: str | None = None,
         search_mode: SearchMode = SearchMode.AUTO,
+        model: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, str] = {"content": content, "search_mode": search_mode.value}
         if required_tool is not None:
             body["required_tool"] = required_tool
+        if model is not None:
+            body["model"] = model
         response = self._client.post(
             f"/users/{self.user_id}/conversations/{conversation_id}/messages",
             json=body,
@@ -214,6 +225,16 @@ class AgentServerClient:
         response = self._client.get(f"/users/{self.user_id}/usage")
         self._raise_for_status(response)
         return cast(dict[str, Any], response.json())
+
+    def get_models(self) -> tuple[ModelSummary, ...]:
+        """读取服务端当前允许选择的模型。"""
+
+        response = self._client.get(f"/users/{self.user_id}/models")
+        self._raise_for_status(response)
+        return tuple(
+            ModelSummary(name=str(item["name"]), primary=bool(item["primary"]))
+            for item in response.json().get("models", [])
+        )
 
     def list_skills(self) -> tuple[SkillSummary, ...]:
         """读取当前用户可见的内置和私有 Skill。"""
@@ -383,14 +404,22 @@ def chat(
         conversation = client.create_conversation()
         conversation_id = conversation.conversation_id
         search_mode = SearchMode.AUTO
+        selected_model: str | None = None
         typer.echo(f"Conversation: {conversation_id}")
         if message is not None:
-            _execute_message(client, conversation, message, search_mode=search_mode)
+            _execute_message(
+                client,
+                conversation,
+                message,
+                search_mode=search_mode,
+                model=selected_model,
+            )
             return
 
         typer.echo(
             "输入 /new 新建、/list 查看、/switch <ID> 切换、"
             "/delete <ID> 删除、/cancel <ID> 取消运行、/usage 查看用量、"
+            "/model [模型名] 查看或切换主模型、"
             "/search-mode auto|rag|web|hybrid 设置检索模式、"
             "/skills 查看 Skill、/mcp 查看 MCP、/test 测试能力、"
             "/exit 或 /quit 退出。"
@@ -413,6 +442,23 @@ def chat(
                 else:
                     search_mode = selected_mode
                     typer.echo(f"Search mode: {search_mode.value}")
+                continue
+            if command == "/model" or command.startswith("/model "):
+                model_name = _command_argument(user_message, "/model")
+                models = client.get_models()
+                if model_name is None:
+                    _show_models(models, selected_model or conversation.primary_model)
+                    continue
+                configured_models = {model.name for model in models}
+                if model_name not in configured_models:
+                    typer.echo(
+                        f"Error: model is not configured: {model_name}",
+                        err=True,
+                    )
+                    _show_models(models, selected_model or conversation.primary_model)
+                    continue
+                selected_model = model_name
+                typer.echo(f"Model: {selected_model}")
                 continue
             if command == "/list":
                 _show_conversations(client.list_conversations(), conversation_id)
@@ -462,6 +508,7 @@ def chat(
                     content,
                     required_tool=required_tool,
                     search_mode=search_mode,
+                    model=selected_model,
                 )
                 continue
             if command.startswith("/switch"):
@@ -560,7 +607,13 @@ def chat(
                     f"[{_conversation_suffix(target.conversation_id)}]"
                 )
                 continue
-            _execute_message(client, conversation, user_message, search_mode=search_mode)
+            _execute_message(
+                client,
+                conversation,
+                user_message,
+                search_mode=search_mode,
+                model=selected_model,
+            )
     except (httpx.HTTPError, RuntimeError) as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(code=1) from error
@@ -605,9 +658,18 @@ def _execute_message(
     content: str,
     required_tool: str | None = None,
     search_mode: SearchMode = SearchMode.AUTO,
+    model: str | None = None,
 ) -> None:
     conversation_id = conversation.conversation_id
-    if required_tool is None and search_mode is SearchMode.AUTO:
+    if model is not None:
+        result = client.send_message(
+            conversation_id,
+            content,
+            required_tool=required_tool,
+            search_mode=search_mode,
+            model=model,
+        )
+    elif required_tool is None and search_mode is SearchMode.AUTO:
         result = client.send_message(conversation_id, content)
     elif required_tool is None:
         result = client.send_message(conversation_id, content, search_mode=search_mode)
@@ -636,6 +698,20 @@ def _show_skills(skills: tuple[SkillSummary, ...]) -> None:
     typer.echo("Installed skills:")
     for skill in skills:
         typer.echo(f"- {skill.name}: {skill.description}")
+
+
+def _show_models(models: tuple[ModelSummary, ...], selected_model: str) -> None:
+    """展示模型清单和当前 CLI 会话选择。"""
+
+    if not models:
+        typer.echo("No models configured.")
+        return
+    typer.echo(f"Current model: {selected_model}")
+    typer.echo("Available models:")
+    for model in models:
+        suffix = " (primary)" if model.primary else ""
+        marker = " *" if model.name == selected_model else ""
+        typer.echo(f"- {model.name}{suffix}{marker}")
 
 
 def _show_mcp(status: MCPStatus) -> None:

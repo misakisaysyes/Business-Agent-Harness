@@ -103,11 +103,12 @@ def test_business_profile_does_not_import_model_services() -> None:
     assert "ChatAnthropic" not in source
 
 
-def test_second_phase_prompt_allows_rag_but_keeps_agent_teams_disabled() -> None:
-    """第二阶段 Prompt 不得同时要求并禁止 document_search。"""
+def test_third_phase_prompt_allows_rag_and_multi_agent_delegation() -> None:
+    """M7 Prompt 应允许 RAG，并指导 Lead 使用隔离 Researcher。"""
 
     prompt = get_system_prompt()
 
     assert "When document_search is available" in prompt
     assert "Do not use RAG/document_search" not in prompt
-    assert "Do not use subagents or agent teams" in prompt
+    assert "When delegate_research is available" in prompt
+    assert "separate rag and web delegations" in prompt

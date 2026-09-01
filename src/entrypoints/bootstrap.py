@@ -14,12 +14,32 @@ from business.knowledge_assistant import (
     BUSINESS_AGENT_NAME,
     create_knowledge_assistant_profile,
 )
+from business.knowledge_assistant.agent_teams.analyst import build_analyst_definition
+from business.knowledge_assistant.agent_teams.lead import (
+    DelegateAnalysisTool,
+    DelegateResearchTool,
+    RequestReviewTool,
+)
+from business.knowledge_assistant.agent_teams.researcher import build_researcher_definitions
+from business.knowledge_assistant.agent_teams.reviewer import build_reviewer_definition
+from business.knowledge_assistant.permission_rules import (
+    DelegateAnalysisPermissionRule,
+    DelegateResearchPermissionRule,
+    RequestReviewPermissionRule,
+)
 from business.knowledge_assistant.profile import create_skill_catalog
 from harness.agent_loop import AgentLoop, create_agent_loop
+from harness.capabilities.agent_teams.contracts import (
+    DelegationBudget,
+    SubagentContext,
+    SubagentDefinition,
+)
+from harness.capabilities.agent_teams.team import TeamCoordinator
 from harness.capabilities.context_compact import ContextCompactConfig, ContextCompactor
 from harness.capabilities.memory import MemorySelectionConfig
 from harness.capabilities.rag import AccessScope, RAGPipeline
 from harness.capabilities.skill_loading import SkillCatalog, SkillManifest
+from harness.capabilities.subagent import SubagentRunner
 from harness.capabilities.task_system import TaskStore
 from harness.conversation import ConversationService
 from harness.error_recovery import ErrorRecoveryPolicy
@@ -93,6 +113,7 @@ class AgentApplication:
     usage_ledger: UserTokenUsageLedger
     agent_name: str
     primary_model: str
+    model_choices: tuple[str, ...]
     mcp_failures: tuple[MCPServerFailure, ...]
 
 
@@ -271,6 +292,100 @@ def bootstrap_agent(
         busy_timeout_seconds=active_settings.checkpoint.busy_timeout_seconds,
     )
 
+    # M7: Researcher 是按任务创建的隔离 Agent Loop。子 Loop 只拿到角色
+    # allowlist 中的工具，因此不会递归拿到 Lead 的 delegate_research。
+    base_profile = profile
+    available_tool_names = tuple(tool.name for tool in base_profile.tools)
+    researcher_definitions = build_researcher_definitions(
+        available_tool_names,
+        max_iterations=active_settings.agent_loop.max_iterations,
+    )
+    team_definitions = {
+        **researcher_definitions,
+        "analyst": build_analyst_definition(
+            available_tool_names,
+            max_iterations=active_settings.agent_loop.max_iterations,
+        ),
+        "reviewer": build_reviewer_definition(
+            max_iterations=active_settings.agent_loop.max_iterations,
+        ),
+    }
+
+    def create_researcher_loop(
+        definition: SubagentDefinition,
+        context: SubagentContext,
+    ) -> AgentLoop:
+        allowed_names = frozenset(
+            context.allowed_tool_names or definition.allowed_tool_names
+        )
+        selected_tools = tuple(
+            tool for tool in base_profile.tools if tool.name in allowed_names
+        )
+        if not selected_tools and definition.role.endswith("researcher"):
+            raise RuntimeError(
+                f"no configured tools are available for researcher role: {definition.role}"
+            )
+        selected_rules = tuple(
+            rule
+            for rule in base_profile.permission_rules
+            if getattr(rule, "name", "")
+            in {
+                "allow_document_catalog",
+                "allow_document_search",
+                "allow_calculator",
+                "search_mode_policy",
+                "mcp_tool_annotations",
+            }
+        )
+        return create_agent_loop(
+            active_model,
+            lambda: definition.system_prompt,
+            checkpointer=active_checkpointer,
+            tools=selected_tools,
+            permission_rules=selected_rules,
+            hooks=base_profile.hooks,
+            hook_failure_mode=base_profile.hook_failure_mode,
+            context_providers=base_profile.context_providers,
+            skill_summaries=(),
+            context_compactor=context_compactor,
+            error_recovery=recovery_policy,
+            max_iterations=min(
+                definition.max_iterations,
+                active_settings.agent_loop.max_iterations,
+            ),
+        )
+
+    coordinator = TeamCoordinator(
+        SubagentRunner(
+            create_researcher_loop,
+            max_context_chars=DelegationBudget().max_context_chars,
+        ),
+        team_definitions,
+    )
+    delegate_research = DelegateResearchTool(coordinator)
+    delegate_analysis = DelegateAnalysisTool(coordinator)
+    request_review = RequestReviewTool(coordinator)
+    profile = base_profile.model_copy(
+        update={
+            "tools": (
+                *base_profile.tools,
+                delegate_research,
+                delegate_analysis,
+                request_review,
+            ),
+            "permission_rules": (
+                *base_profile.permission_rules,
+                DelegateResearchPermissionRule(),
+                DelegateAnalysisPermissionRule(),
+                RequestReviewPermissionRule(),
+            ),
+            "capabilities": (
+                *base_profile.capabilities,
+                Capability(name="multi_agent"),
+            ),
+        }
+    )
+
     return create_agent_loop(
         active_model,
         profile.system_prompt,
@@ -430,9 +545,16 @@ def create_agent_application(
         busy_timeout_seconds=active_settings.checkpoint.busy_timeout_seconds,
     )
     if isinstance(base_model, ModelGateway):
-        primary_model = base_model.routes[0].label
+        model_choices = tuple(route.label for route in base_model.routes)
+        primary_model = model_choices[0]
     else:
-        primary_model = base_model.name
+        configured_model = active_settings.model
+        primary_model = (
+            f"{configured_model.provider}/{configured_model.model_id}"
+            if configured_model.provider is not None and configured_model.model_id is not None
+            else base_model.name
+        )
+        model_choices = (primary_model,)
     return AgentApplication(
         runtimes=runtimes,
         conversations=ConversationService(runtimes.get_agent_loop, conversation_store),
@@ -441,6 +563,7 @@ def create_agent_application(
         usage_ledger=usage_ledger,
         agent_name=BUSINESS_AGENT_NAME,
         primary_model=primary_model,
+        model_choices=model_choices,
         mcp_failures=runtimes.mcp_integration.failures,
     )
 

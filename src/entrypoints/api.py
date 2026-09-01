@@ -93,6 +93,7 @@ class SendMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     content: str = Field(min_length=1, max_length=100_000)
+    model: str | None = Field(default=None, min_length=1, max_length=256)
     required_tool: str | None = Field(
         default=None,
         min_length=1,
@@ -165,6 +166,24 @@ class UserTokenUsageResponse(BaseModel):
 
     user_id: str
     token_usage: TokenUsage
+
+
+class ModelSummaryResponse(BaseModel):
+    """服务端当前配置的可选模型。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    primary: bool
+
+
+class ListModelsResponse(BaseModel):
+    """当前 Agent Runtime 可接受的模型选择。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    primary_model: str
+    models: tuple[ModelSummaryResponse, ...]
 
 
 class SkillSummaryResponse(BaseModel):
@@ -316,6 +335,11 @@ def create_app(application: AgentApplication | None = None) -> FastAPI:
         request: SendMessageRequest,
     ) -> RunResponse:
         agent = resolve_application()
+        if request.model is not None and request.model not in agent.model_choices:
+            raise HTTPException(
+                status_code=422,
+                detail=f"model is not configured: {request.model}",
+            )
         events: list[ModelGatewayEvent] = []
         usages: list[TokenUsage] = []
         try:
@@ -329,12 +353,30 @@ def create_app(application: AgentApplication | None = None) -> FastAPI:
                     request.content,
                     request.required_tool,
                     request.search_mode,
+                    request.model,
                 )
         except Exception as error:
             agent.usage_ledger.record(user_id, usages)
             _raise_http_error(error, events)
         request_usage = agent.usage_ledger.record(user_id, usages)
         return RunResponse.from_result(result, events, request_usage)
+
+    async def list_models(user_id: str) -> ListModelsResponse:
+        agent = resolve_application()
+        try:
+            agent.runtimes.get(user_id)
+        except InvalidUserIdError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ListModelsResponse(
+            primary_model=agent.primary_model,
+            models=tuple(
+                ModelSummaryResponse(
+                    name=model,
+                    primary=model == agent.primary_model,
+                )
+                for model in agent.model_choices
+            ),
+        )
 
     async def resume_permission(
         user_id: str,
@@ -463,6 +505,12 @@ def create_app(application: AgentApplication | None = None) -> FastAPI:
         get_token_usage,
         methods=["GET"],
         response_model=UserTokenUsageResponse,
+    )
+    server.add_api_route(
+        "/users/{user_id}/models",
+        list_models,
+        methods=["GET"],
+        response_model=ListModelsResponse,
     )
     server.add_api_route(
         "/users/{user_id}/skills",

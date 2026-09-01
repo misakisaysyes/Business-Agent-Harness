@@ -210,6 +210,7 @@ class ConversationService:
         content: str,
         required_tool: str | None = None,
         search_mode: str = "auto",
+        model: str | None = None,
     ) -> ConversationRunResult:
         """执行一条用户消息；同一 Conversation 有活跃 Run 时立即拒绝。
 
@@ -263,6 +264,8 @@ class ConversationService:
                 "trace_id": trace_id,
                 "search_mode": search_mode,
             }
+            if model is not None:
+                metadata["model"] = model
             if required_tool is not None:
                 metadata["required_tool"] = required_tool
 

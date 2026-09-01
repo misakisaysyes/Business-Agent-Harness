@@ -4,8 +4,10 @@
 单 Agent 和第二阶段 RAG 闭环之上，引入 Lead Agent、Subagent/Teammate 和 Reviewer，验证
 Knowledge Assistant 可以把复杂研究任务拆分、并行执行、审核后再汇总。
 
-阶段状态：**计划中**。当前 `harness/capabilities/agent_teams/` 和
-`business/knowledge_assistant/agent_teams/` 只有模块骨架，尚未接入 Agent Loop、Profile 和运行时。
+阶段状态：**M7-0～M7-2、M8-1～M8-2 核心实现已完成，M8-3 综合验收中**。当前已完成
+`harness/capabilities/agent_teams/` 的子 Agent 契约、隔离运行时、预算、委派协调、
+进程内 MessageBus、Team Protocols、任务级重试和审核轮次限制，并接入
+`business/knowledge_assistant/agent_teams/` 的 Lead/Researcher/Analyst/Reviewer 与 Bootstrap。
 
 ## 1. 阶段目标
 
