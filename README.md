@@ -71,6 +71,12 @@ flowchart LR
         modelGateway -.-> modelProvider["Primary and Fallback Models"]
         agentLoop --> mcpAdapter["MCP Adapter"]
         mcpAdapter -.-> mcpServers["Configured MCP Servers"]
+
+        subgraph rag["RAG 能力"]
+            ragPipeline["RAG Pipeline"] --> vectorDb[("PostgreSQL + pgvector")]
+            indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
+            ingestion --> vectorDb
+        end
     end
 
     subgraph business["Business 能力：Knowledge Assistant"]
@@ -84,12 +90,6 @@ flowchart LR
 
     permission --> businessTools
     documentSearch --> ragPipeline
-
-    subgraph shared["Shared Services：RAG"]
-        ragPipeline["RAG Pipeline"] --> vectorDb[("PostgreSQL + pgvector")]
-        indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
-        ingestion --> vectorDb
-    end
 ```
 
 ### 技术选型
