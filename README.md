@@ -56,27 +56,37 @@ M7-M8 默认只使用进程内资源，不依赖 Redis、后台 Worker 或公网
 flowchart LR
     cli["CLI Client"] --> api["FastAPI Agent Server"]
     api --> conversation["Conversation Service"]
-    conversation --> runtime["User Runtime Registry"]
-    conversation --> conversationDb[("SQLite Conversation Index")]
-    runtime --> agentLoop["LangGraph Agent Loop"]
-    agentLoop --> checkpointDb[("SQLite LangGraph Checkpoint")]
-    agentLoop --> permission["Permission Pipeline and Hooks"]
-    permission --> tools["Business and Harness Tools"]
-    tools --> userStores[("Per-user Tasks, Memory, Artifacts")]
-    tools --> documentSearch["document_search"]
-    documentSearch --> ragPipeline["RAG Pipeline"]
-    ragPipeline --> vectorDb[("PostgreSQL + pgvector")]
-    agentLoop --> teamCoordinator["TeamCoordinator / Lead"]
-    teamCoordinator --> messageBus["In-memory MessageBus"]
-    teamCoordinator --> researcher["Researcher"]
-    teamCoordinator --> analyst["Analyst"]
-    teamCoordinator --> reviewer["Reviewer"]
     indexer["CLI Indexer"] --> ingestion["Load, Split, Embed"]
     ingestion --> vectorDb
-    agentLoop --> modelGateway["Model Gateway"]
-    modelGateway -.-> modelProvider["Primary and Fallback Models"]
-    agentLoop --> mcpAdapter["MCP Adapter"]
-    mcpAdapter -.-> mcpServers["Configured MCP Servers"]
+
+    subgraph harness["Harness 能力"]
+        conversation --> runtime["User Runtime Registry"]
+        conversation --> conversationDb[("SQLite Conversation Index")]
+        runtime --> agentLoop["LangGraph Agent Loop"]
+        agentLoop --> checkpointDb[("SQLite LangGraph Checkpoint")]
+        agentLoop --> permission["Permission Pipeline and Hooks"]
+        permission --> harnessTools["Harness Tools"]
+        harnessTools --> userStores[("Per-user Tasks, Memory, Artifacts")]
+        agentLoop --> teamCoordinator["TeamCoordinator"]
+        teamCoordinator --> messageBus["In-memory MessageBus"]
+        agentLoop --> modelGateway["Model Gateway"]
+        modelGateway -.-> modelProvider["Primary and Fallback Models"]
+        agentLoop --> mcpAdapter["MCP Adapter"]
+        mcpAdapter -.-> mcpServers["Configured MCP Servers"]
+    end
+
+    subgraph business["Business 能力：Knowledge Assistant"]
+        agentLoop --> lead["Lead Agent"]
+        lead --> businessTools["Business Tools"]
+        businessTools --> documentSearch["document_search"]
+        documentSearch --> ragPipeline["RAG Pipeline"]
+        ragPipeline --> vectorDb[("PostgreSQL + pgvector")]
+        teamCoordinator --> researcher["Researcher"]
+        teamCoordinator --> analyst["Analyst"]
+        teamCoordinator --> reviewer["Reviewer"]
+    end
+
+    permission --> businessTools
 ```
 
 ### 技术选型
